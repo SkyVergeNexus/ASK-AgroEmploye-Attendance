@@ -3,6 +3,9 @@
   command = "npm run build"
   publish = "dist"
 
+[install]
+  command = "rm -f package-lock.json && npm install"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
