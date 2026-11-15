@@ -30,8 +30,6 @@ const coverUpload = multer({
 });
 
 // ============ IP HELPERS ============
-
-// Turn a single IP (v4 only) into its 32-bit unsigned integer form.
 function ipv4ToInt(ip) {
   const parts = String(ip).split('.');
   if (parts.length !== 4) return null;
@@ -45,7 +43,6 @@ function ipv4ToInt(ip) {
   );
 }
 
-// Check if an IPv4 is inside a CIDR range (or exactly equals a bare IP).
 function ipv4InCidr(ip, entry) {
   if (!entry) return false;
   if (!entry.includes('/')) return ip === entry;
@@ -62,7 +59,6 @@ function ipv4InCidr(ip, entry) {
   return (ipN & mask) === (baseN & mask);
 }
 
-// Does ip match any entry in the allowlist? Supports bare IPs and CIDR.
 function ipMatchesAllowList(ip, allowedIps) {
   if (!ip) return false;
   const entries = String(allowedIps || '')
@@ -73,17 +69,15 @@ function ipMatchesAllowList(ip, allowedIps) {
   return entries.some((entry) => ipv4InCidr(ip, entry));
 }
 
-// Extract the client IP, preferring proxy headers when present.
 function getClientIp(req) {
   const fwd = req.headers['x-forwarded-for'];
   let ip = fwd
     ? String(fwd).split(',')[0].trim()
     : req.ip || req.connection?.remoteAddress || null;
-  if (ip && ip.startsWith('::ffff:')) ip = ip.slice(7); // IPv4-mapped IPv6
+  if (ip && ip.startsWith('::ffff:')) ip = ip.slice(7);
   return ip;
 }
 
-// Validate that a single allowlist entry is a valid IPv4 or IPv4/CIDR.
 function isValidIpEntry(entry) {
   if (!entry) return false;
   if (entry.includes('/')) {
@@ -117,10 +111,7 @@ router.get('/public', async (req, res) => {
   }
 });
 
-// ============ DEBUG: WHAT IP DOES THE SERVER SEE? (admin only) ============
-// NOTE: This returns the SERVER's outbound IP if it calls ipify.
-// For the admin's BROWSER ip, the frontend calls ipify itself.
-// This route is still useful for debugging reverse-proxy headers.
+// ============ DEBUG: SERVER IP + CLIENT IP ============
 router.get('/my-ip', verifyToken, isAdmin, async (req, res) => {
   try {
     const controller = new AbortController();
@@ -145,29 +136,33 @@ router.get('/my-ip', verifyToken, isAdmin, async (req, res) => {
 });
 
 // ============ CHECK THE CALLER'S IP AGAINST THE ALLOWLIST ============
-// Called by the employee dashboard before clock-in, and used by the
-// clock-in route internally as the authoritative check.
 router.get('/check-ip', verifyToken, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT enforce_location, allowed_ips, geofence_radius_m FROM settings WHERE id = 1'
+      'SELECT enforce_location, enforce_network, allowed_ips, geofence_radius_m FROM settings WHERE id = 1'
     );
     const settings = rows[0] || {};
-    const enforce = !!Number(settings.enforce_location);
+    const enforceLoc = !!Number(settings.enforce_location);
+    const enforceNet = !!Number(settings.enforce_network);
     const clientIp = getClientIp(req);
 
-    if (!enforce) {
+    // If network enforcement is OFF, the IP check always passes.
+    if (!enforceNet) {
       return res.json({
         enforce: false,
+        enforceLocation: enforceLoc,
+        enforceNetwork: false,
         allowed: true,
         clientIp,
-        message: 'Location enforcement is off',
+        message: 'Office network check is off',
       });
     }
 
     const allowed = ipMatchesAllowList(clientIp, settings.allowed_ips);
     return res.json({
       enforce: true,
+      enforceLocation: enforceLoc,
+      enforceNetwork: true,
       allowed,
       clientIp,
       message: allowed
@@ -229,6 +224,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
     office_lng,
     geofence_radius_m,
     enforce_location,
+    enforce_network,
     allowed_ips,
   } = req.body;
 
@@ -250,7 +246,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
     return res.status(400).json({ message: 'Work start must be before work end' });
   }
 
-  // --- normalize IPs: trim, drop empties, dedupe, validate ---
+  // --- normalize IPs ---
   const rawEntries = String(allowed_ips || '')
     .split(',')
     .map((x) => x.trim())
@@ -267,15 +263,18 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
     });
   }
 
-  // --- geofence + IP validation ---
-  const enforce = enforce_location ? 1 : 0;
+  // --- flags ---
+  const enforceLoc = enforce_location ? 1 : 0;
+  const enforceNet = enforce_network ? 1 : 0;
+
   const lat =
     office_lat == null || office_lat === '' ? null : Number(office_lat);
   const lng =
     office_lng == null || office_lng === '' ? null : Number(office_lng);
   const radius = geofence_radius_m ? Number(geofence_radius_m) : 200;
 
-  if (enforce) {
+  // --- geofence validation (only when GPS enforcement is on) ---
+  if (enforceLoc) {
     if (lat == null || lng == null) {
       return res.status(400).json({
         message:
@@ -297,12 +296,14 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
         .status(400)
         .json({ message: 'Geofence radius must be between 10m and 20000m' });
     }
-    if (ipList.length === 0) {
-      return res.status(400).json({
-        message:
-          'At least one office IP (or CIDR range) is required when location enforcement is on',
-      });
-    }
+  }
+
+  // --- network validation (only when network enforcement is on) ---
+  if (enforceNet && ipList.length === 0) {
+    return res.status(400).json({
+      message:
+        'At least one office IP (or CIDR range) is required when office network enforcement is on',
+    });
   }
 
   try {
@@ -310,7 +311,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
       `UPDATE settings
        SET work_start = ?, work_end = ?, late_threshold_minutes = ?, company_name = ?,
            office_lat = ?, office_lng = ?, geofence_radius_m = ?,
-           enforce_location = ?, allowed_ips = ?
+           enforce_location = ?, enforce_network = ?, allowed_ips = ?
        WHERE id = 1`,
       [
         work_start,
@@ -320,7 +321,8 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
         lat,
         lng,
         radius,
-        enforce,
+        enforceLoc,
+        enforceNet,
         ipList.length ? ipList.join(', ') : null,
       ]
     );
@@ -331,8 +333,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   }
 });
 
-// Export helpers so attendance.js can reuse the exact same logic
-// (this is what guarantees the check-ip endpoint and clock-in agree).
+// Export helpers so attendance.js can reuse the exact same logic.
 module.exports = router;
 module.exports.getClientIp = getClientIp;
 module.exports.ipMatchesAllowList = ipMatchesAllowList;

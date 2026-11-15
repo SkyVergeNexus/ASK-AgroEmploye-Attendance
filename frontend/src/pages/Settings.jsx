@@ -16,8 +16,6 @@ import toast from 'react-hot-toast';
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
-// Same matching logic as the backend, so the preview in the UI
-// agrees with what the server will decide at clock-in time.
 function ipv4ToInt(ip) {
   const parts = String(ip).split('.');
   if (parts.length !== 4) return null;
@@ -52,12 +50,12 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
   const [enforce, setEnforce] = useState(false);
+  const [enforceNetwork, setEnforceNetwork] = useState(true);
 
   const [currentIp, setCurrentIp] = useState(null);
   const [ipLoading, setIpLoading] = useState(false);
   const [allowedIpsValue, setAllowedIpsValue] = useState('');
 
-  // Cover image state
   const [coverUrl, setCoverUrl] = useState(null);
   const [uploadingCover, setUploadingCover] = useState(false);
 
@@ -65,8 +63,10 @@ export default function Settings() {
     setLoading(true);
     try {
       const { data } = await api.get('/settings');
-      const enforced = !!Number(data.enforce_location);
-      setEnforce(enforced);
+      const enforcedLoc = !!Number(data.enforce_location);
+      const enforcedNet = data.enforce_network == null ? true : !!Number(data.enforce_network);
+      setEnforce(enforcedLoc);
+      setEnforceNetwork(enforcedNet);
       setCoverUrl(data.login_cover_url || null);
       setAllowedIpsValue(data.allowed_ips || '');
       form.setFieldsValue({
@@ -77,7 +77,8 @@ export default function Settings() {
         office_lat: data.office_lat ? Number(data.office_lat) : null,
         office_lng: data.office_lng ? Number(data.office_lng) : null,
         geofence_radius_m: data.geofence_radius_m ?? 200,
-        enforce_location: enforced,
+        enforce_location: enforcedLoc,
+        enforce_network: enforcedNet,
         allowed_ips: data.allowed_ips || '',
       });
     } catch (err) {
@@ -87,10 +88,6 @@ export default function Settings() {
     }
   };
 
-  // Fetch from the BROWSER, not the backend. The backend is deployed on a
-  // different machine, so its outbound IP is the SERVER's — which is not the
-  // IP employees will be checked against. Only the browser knows the true
-  // client IP, and it must match what the server sees via x-forwarded-for.
   const loadCurrentIp = async () => {
     setIpLoading(true);
     try {
@@ -134,14 +131,10 @@ export default function Settings() {
   };
 
   const addCurrentIpToAllowList = () => {
-    if (!currentIp) {
-      return toast.error('No current IP detected');
-    }
+    if (!currentIp) return toast.error('No current IP detected');
     const current = form.getFieldValue('allowed_ips') || '';
     const list = current.split(',').map((x) => x.trim()).filter(Boolean);
-    if (list.includes(currentIp)) {
-      return toast('This IP is already in the list');
-    }
+    if (list.includes(currentIp)) return toast('This IP is already in the list');
     const next = [...list, currentIp].join(', ');
     form.setFieldsValue({ allowed_ips: next });
     setAllowedIpsValue(next);
@@ -159,12 +152,10 @@ export default function Settings() {
     setAllowedIpsValue(next);
   };
 
-  // Preview: does the current browser IP match the current allowlist?
   const ipPreview = useMemo(() => {
     if (!currentIp) return null;
-    if (!allowedIpsValue.trim()) return { matches: false, reason: 'No IPs saved yet' };
-    const matches = ipMatchesAllowList(currentIp, allowedIpsValue);
-    return { matches };
+    if (!allowedIpsValue.trim()) return { matches: false };
+    return { matches: ipMatchesAllowList(currentIp, allowedIpsValue) };
   }, [currentIp, allowedIpsValue]);
 
   const savedIps = useMemo(
@@ -172,7 +163,6 @@ export default function Settings() {
     [allowedIpsValue]
   );
 
-  // Upload new cover image (immediate — doesn't need form save)
   const uploadCover = async (file) => {
     const fd = new FormData();
     fd.append('cover', file);
@@ -215,6 +205,7 @@ export default function Settings() {
         office_lng: values.office_lng,
         geofence_radius_m: values.geofence_radius_m,
         enforce_location: values.enforce_location ? 1 : 0,
+        enforce_network: values.enforce_network ? 1 : 0,
         allowed_ips: values.allowed_ips || null,
       });
       toast.success('Settings saved');
@@ -245,10 +236,9 @@ export default function Settings() {
         description={
           <>
             Anyone clocking in after (work start + late threshold) is marked late.
-            On-site clock-ins follow the office checks below when{' '}
-            <strong>Enforce location</strong> is ON. Remote clock-ins require a
-            selfie and GPS location and are only accepted during the configured
-            work hours.
+            On-site clock-ins follow the checks below when their switches are ON.
+            Remote clock-ins require a selfie and GPS location and are only
+            accepted during the configured work hours.
           </>
         }
       />
@@ -264,6 +254,7 @@ export default function Settings() {
             requiredMark={false}
             onValuesChange={(changed) => {
               if ('enforce_location' in changed) setEnforce(!!changed.enforce_location);
+              if ('enforce_network' in changed) setEnforceNetwork(!!changed.enforce_network);
               if ('allowed_ips' in changed) setAllowedIpsValue(changed.allowed_ips || '');
             }}
           >
@@ -381,9 +372,10 @@ export default function Settings() {
             </Title>
 
             <Form.Item
-              label="Enforce location on clock-in"
+              label="Enforce GPS location on clock-in"
               name="enforce_location"
               valuePropName="checked"
+              extra="When ON, employees must be within the GPS radius of the office coordinates."
             >
               <Switch checkedChildren="On" unCheckedChildren="Off" />
             </Form.Item>
@@ -447,138 +439,158 @@ export default function Settings() {
               <WifiOutlined /> Office Network (Allowed IPs)
             </Title>
 
-            <Alert
-              type="info"
-              style={{ marginBottom: 12 }}
-              icon={<WifiOutlined />}
-              showIcon
-              title={
-                <Space wrap>
-                  <span>Your current public IP:</span>
-                  {ipLoading ? (
-                    <Spin size="small" />
-                  ) : currentIp ? (
-                    <Tag color="blue" style={{ fontFamily: 'monospace', fontSize: 13 }}>
-                      {currentIp}
-                    </Tag>
-                  ) : (
-                    <Tag color="red">Could not detect</Tag>
-                  )}
-                  <Button
-                    size="small"
-                    type="primary"
-                    ghost
-                    icon={<CopyOutlined />}
-                    onClick={addCurrentIpToAllowList}
-                    disabled={!currentIp}
-                  >
-                    Add to allowlist
-                  </Button>
-                  <Button size="small" onClick={loadCurrentIp} loading={ipLoading}>
-                    Refresh
-                  </Button>
-                </Space>
-              }
-              description={
-                <div style={{ fontSize: 13 }}>
-                  <div>
-                    This is the IP <strong>your browser</strong> is using right now
-                    (fetched directly from ipify).
-                  </div>
-                  {ipPreview && (
-                    <div style={{ marginTop: 6 }}>
-                      {ipPreview.matches ? (
-                        <Tag color="green" icon={<CheckCircleOutlined />}>
-                          This IP is already covered by the allowlist
-                        </Tag>
-                      ) : (
-                        <Tag color="orange" icon={<CloseCircleOutlined />}>
-                          Not in allowlist — employees on this network will be blocked
-                        </Tag>
-                      )}
-                    </div>
-                  )}
-                </div>
-              }
-            />
-
             <Form.Item
-              label={
-                <Space>
-                  <WifiOutlined />
-                  <span>
-                    Allowed IPs (comma-separated) {enforce ? '— required' : '— optional'}
-                  </span>
-                </Space>
-              }
-              name="allowed_ips"
-              rules={
-                enforce
-                  ? [
-                      {
-                        validator: (_, value) => {
-                          const list = (value || '')
-                            .split(',')
-                            .map((x) => x.trim())
-                            .filter(Boolean);
-                          if (!list.length) {
-                            return Promise.reject(
-                              new Error('At least one office IP is required when enforcing')
-                            );
-                          }
-                          return Promise.resolve();
-                        },
-                      },
-                    ]
-                  : []
-              }
-              extra="Bare IPv4 (e.g. 41.90.64.10) or CIDR range (e.g. 41.90.64.0/24). Add the office's WAN IP — the one shown by ipify when you're on the office Wi-Fi."
+              label="Enforce office network on clock-in"
+              name="enforce_network"
+              valuePropName="checked"
+              extra="When ON, employees must be on the office Wi-Fi (matching the allowlist) to clock in on-site. Turn OFF for demos, training, or on-site without Wi-Fi."
             >
-              <TextArea
-                rows={2}
-                placeholder="e.g. 41.90.64.10, 102.68.10.0/24"
-                style={{ fontFamily: 'monospace' }}
-              />
+              <Switch checkedChildren="On" unCheckedChildren="Off" />
             </Form.Item>
 
-            {savedIps.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <Text type="secondary" style={{ fontSize: 12, marginRight: 6 }}>
-                  Saved ({savedIps.length}):
-                </Text>
-                {savedIps.map((ip) => (
-                  <Tag
-                    key={ip}
-                    closable
-                    onClose={(e) => {
-                      e.preventDefault();
-                      removeIpFromList(ip);
-                    }}
-                    style={{ fontFamily: 'monospace', marginBottom: 4 }}
-                  >
-                    {ip}
-                  </Tag>
-                ))}
-              </div>
+            {enforceNetwork && (
+              <>
+                <Alert
+                  type="info"
+                  style={{ marginBottom: 12 }}
+                  icon={<WifiOutlined />}
+                  showIcon
+                  title={
+                    <Space wrap>
+                      <span>Your current public IP:</span>
+                      {ipLoading ? (
+                        <Spin size="small" />
+                      ) : currentIp ? (
+                        <Tag color="blue" style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                          {currentIp}
+                        </Tag>
+                      ) : (
+                        <Tag color="red">Could not detect</Tag>
+                      )}
+                      <Button
+                        size="small"
+                        type="primary"
+                        ghost
+                        icon={<CopyOutlined />}
+                        onClick={addCurrentIpToAllowList}
+                        disabled={!currentIp}
+                      >
+                        Add to allowlist
+                      </Button>
+                      <Button size="small" onClick={loadCurrentIp} loading={ipLoading}>
+                        Refresh
+                      </Button>
+                    </Space>
+                  }
+                  description={
+                    <div style={{ fontSize: 13 }}>
+                      <div>
+                        This is the IP <strong>your browser</strong> is using right now
+                        (fetched directly from ipify).
+                      </div>
+                      {ipPreview && (
+                        <div style={{ marginTop: 6 }}>
+                          {ipPreview.matches ? (
+                            <Tag color="green" icon={<CheckCircleOutlined />}>
+                              This IP is already covered by the allowlist
+                            </Tag>
+                          ) : (
+                            <Tag color="orange" icon={<CloseCircleOutlined />}>
+                              Not in allowlist — employees on this network will be blocked
+                            </Tag>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  }
+                />
+
+                <Form.Item
+                  label={
+                    <Space>
+                      <WifiOutlined />
+                      <span>Allowed IPs (comma-separated)</span>
+                    </Space>
+                  }
+                  name="allowed_ips"
+                  rules={
+                    enforceNetwork
+                      ? [
+                          {
+                            validator: (_, value) => {
+                              const list = (value || '')
+                                .split(',')
+                                .map((x) => x.trim())
+                                .filter(Boolean);
+                              if (!list.length) {
+                                return Promise.reject(
+                                  new Error('At least one office IP is required when network enforcement is on')
+                                );
+                              }
+                              return Promise.resolve();
+                            },
+                          },
+                        ]
+                      : []
+                  }
+                  extra="Bare IPv4 (e.g. 41.90.64.10) or CIDR range (e.g. 41.90.64.0/24). Add the office's WAN IP — the one shown by ipify when you're on the office Wi-Fi."
+                >
+                  <TextArea
+                    rows={2}
+                    placeholder="e.g. 41.90.64.10, 102.68.10.0/24"
+                    style={{ fontFamily: 'monospace' }}
+                  />
+                </Form.Item>
+
+                {savedIps.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <Text type="secondary" style={{ fontSize: 12, marginRight: 6 }}>
+                      Saved ({savedIps.length}):
+                    </Text>
+                    {savedIps.map((ip) => (
+                      <Tag
+                        key={ip}
+                        closable
+                        onClose={(e) => {
+                          e.preventDefault();
+                          removeIpFromList(ip);
+                        }}
+                        style={{ fontFamily: 'monospace', marginBottom: 4 }}
+                      >
+                        {ip}
+                      </Tag>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
-            {enforce && (
+            {(enforce || enforceNetwork) && (
               <Alert
                 type="warning"
                 showIcon
                 style={{ marginBottom: 16 }}
-                title="Employees can only clock in when both conditions are met"
+                title="Employees can only clock in when all enabled conditions are met"
                 description={
                   <>
-                    <strong>1.</strong> Connected to an office Wi-Fi network whose public
-                    IP matches the list above.
-                    <br />
-                    <strong>2.</strong> Physically within the GPS geofence radius of the
-                    office coordinates.
-                    <br />
+                    {enforceNetwork && (
+                      <>
+                        <strong>✓ Office network</strong> — device IP must be in the allowlist.
+                        <br />
+                      </>
+                    )}
+                    {enforce && (
+                      <>
+                        <strong>✓ GPS geofence</strong> — must be within the configured radius.
+                        <br />
+                      </>
+                    )}
+                    {!enforceNetwork && !enforce && (
+                      <>Both checks are off — any logged-in employee can clock in manually.</>
+                    )}
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      The server checks the IP it actually sees on the socket — not
-                      anything the browser claims. This is unspoofable.
+                      The server checks the IP it actually sees on the socket, not what
+                      the browser claims. This is unspoofable.
                     </Text>
                   </>
                 }

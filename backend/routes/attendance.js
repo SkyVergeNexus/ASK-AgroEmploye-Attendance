@@ -7,8 +7,6 @@ const net = require('net');
 const router = express.Router();
 
 // ============ IP HELPERS ============
-// Same logic as settings.js so check-ip and clock-in always agree.
-
 function ipv4ToInt(ip) {
   const parts = String(ip).split('.');
   if (parts.length !== 4) return null;
@@ -83,7 +81,7 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-// ============ CLOCK IN (on-site IP+GPS, or remote selfie+GPS) ============
+// ============ CLOCK IN ============
 router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) => {
   const today = localDateString();
   let selfieSaved = false;
@@ -99,7 +97,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
   };
 
   try {
-    // --- 1) Reject duplicate clock-in ---
     const [existing] = await pool.query(
       'SELECT * FROM attendance WHERE employee_id=? AND attendance_date=?',
       [req.user.id, today]
@@ -120,11 +117,9 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     }
     if (mode === 'onsite') await removeUploadedSelfie();
 
-    const enforce = !!Number(settings.enforce_location);
+    const enforceLoc = !!Number(settings.enforce_location);
+    const enforceNet = !!Number(settings.enforce_network);
 
-    // ⚠️ SECURITY: the authoritative IP is what the SERVER saw on the socket.
-    // req.body.publicIp is kept only for logging/debugging. Do NOT use it
-    // for auth decisions — it is user-controllable.
     const clientIp = getClientIp(req);
     const bodyPublicIp = req.body?.publicIp
       ? String(req.body.publicIp).trim()
@@ -191,52 +186,56 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       remoteSelfie = '/uploads/' + req.file.filename;
       method = 'remote';
       verified = 1;
-    } else if (enforce) {
-      // ---------- ON-SITE LOCATION CHECK (IP + GPS) ----------
+    } else if (enforceLoc || enforceNet) {
+      // ---------- ON-SITE — run whichever checks are enabled ----------
 
-      // --- 1) IP check using server-observed IP (unspoofable) ---
-      if (!clientIp || !ipMatchesAllowList(clientIp, settings.allowed_ips)) {
-        await removeUploadedSelfie();
-        return res.status(403).json({
-          message: 'You must be connected to the office Wi-Fi to clock in.',
-          requiresOfficeWifi: true,
-          sawIp: clientIp, // safe to expose for debugging
-        });
+      // --- 1) IP check (only when network enforcement is on) ---
+      if (enforceNet) {
+        if (!clientIp || !ipMatchesAllowList(clientIp, settings.allowed_ips)) {
+          await removeUploadedSelfie();
+          return res.status(403).json({
+            message: 'You must be connected to the office Wi-Fi to clock in.',
+            requiresOfficeWifi: true,
+            sawIp: clientIp,
+          });
+        }
       }
 
-      // --- 2) GPS check ---
-      if (
-        bodyLat == null ||
-        bodyLng == null ||
-        settings.office_lat == null ||
-        settings.office_lng == null
-      ) {
-        await removeUploadedSelfie();
-        return res.status(403).json({
-          message: 'Location required. Enable GPS on your device to clock in.',
-          requiresLocation: true,
-        });
+      // --- 2) GPS check (only when location enforcement is on) ---
+      if (enforceLoc) {
+        if (
+          bodyLat == null ||
+          bodyLng == null ||
+          settings.office_lat == null ||
+          settings.office_lng == null
+        ) {
+          await removeUploadedSelfie();
+          return res.status(403).json({
+            message: 'Location required. Enable GPS on your device to clock in.',
+            requiresLocation: true,
+          });
+        }
+
+        distance = haversineMeters(
+          bodyLat,
+          bodyLng,
+          Number(settings.office_lat),
+          Number(settings.office_lng)
+        );
+        const radius = Number(settings.geofence_radius_m || 200);
+        if (distance > radius) {
+          await removeUploadedSelfie();
+          return res.status(403).json({
+            message: `You are ${Math.round(
+              distance
+            )}m from the office. Must be within ${radius}m to clock in.`,
+            distance: Math.round(distance),
+            radius,
+          });
+        }
       }
 
-      distance = haversineMeters(
-        bodyLat,
-        bodyLng,
-        Number(settings.office_lat),
-        Number(settings.office_lng)
-      );
-      const radius = Number(settings.geofence_radius_m || 200);
-      if (distance > radius) {
-        await removeUploadedSelfie();
-        return res.status(403).json({
-          message: `You are ${Math.round(
-            distance
-          )}m from the office. Must be within ${radius}m to clock in.`,
-          distance: Math.round(distance),
-          radius,
-        });
-      }
-
-      method = 'ip+gps';
+      method = enforceLoc && enforceNet ? 'ip+gps' : enforceLoc ? 'gps' : 'ip';
       verified = 1;
     } else {
       method = 'manual';
@@ -265,7 +264,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
         status,
         bodyLat,
         bodyLng,
-        clientIp || bodyPublicIp || null, // prefer server-seen IP
+        clientIp || bodyPublicIp || null,
         method,
         verified,
         mode,
