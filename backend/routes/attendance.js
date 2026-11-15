@@ -3,9 +3,61 @@ const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const fs = require('fs');
+const net = require('net');
 const router = express.Router();
 
-// ============ HELPERS ============
+// ============ IP HELPERS ============
+// Same logic as settings.js so check-ip and clock-in always agree.
+
+function ipv4ToInt(ip) {
+  const parts = String(ip).split('.');
+  if (parts.length !== 4) return null;
+  const nums = parts.map((p) => Number(p));
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return (
+    ((nums[0] << 24) >>> 0) +
+    ((nums[1] << 16) >>> 0) +
+    ((nums[2] << 8) >>> 0) +
+    (nums[3] >>> 0)
+  );
+}
+
+function ipv4InCidr(ip, entry) {
+  if (!entry) return false;
+  if (!entry.includes('/')) return ip === entry;
+
+  const [base, bitsStr] = entry.split('/');
+  const bits = Number(bitsStr);
+  if (!Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+
+  const ipN = ipv4ToInt(ip);
+  const baseN = ipv4ToInt(base);
+  if (ipN == null || baseN == null) return false;
+
+  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+  return (ipN & mask) === (baseN & mask);
+}
+
+function ipMatchesAllowList(ip, allowedIps) {
+  if (!ip) return false;
+  const entries = String(allowedIps || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (!entries.length) return false;
+  return entries.some((entry) => ipv4InCidr(ip, entry));
+}
+
+function getClientIp(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  let ip = fwd
+    ? String(fwd).split(',')[0].trim()
+    : req.ip || req.connection?.remoteAddress || null;
+  if (ip && ip.startsWith('::ffff:')) ip = ip.slice(7);
+  return ip;
+}
+
+// ============ TIME HELPERS ============
 function localDateString(d = new Date()) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -31,14 +83,6 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-function getClientIp(req) {
-  const fwd = req.headers['x-forwarded-for'];
-  if (fwd) return String(fwd).split(',')[0].trim();
-  let ip = req.ip || req.connection?.remoteAddress || null;
-  if (ip && ip.startsWith('::ffff:')) ip = ip.slice(7);
-  return ip;
-}
-
 // ============ CLOCK IN (on-site IP+GPS, or remote selfie+GPS) ============
 router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) => {
   const today = localDateString();
@@ -48,11 +92,14 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     try {
       await fs.promises.unlink(req.file.path);
     } catch (err) {
-      if (err.code !== 'ENOENT') console.error('[attendance] selfie cleanup failed:', err.message);
+      if (err.code !== 'ENOENT') {
+        console.error('[attendance] selfie cleanup failed:', err.message);
+      }
     }
   };
 
   try {
+    // --- 1) Reject duplicate clock-in ---
     const [existing] = await pool.query(
       'SELECT * FROM attendance WHERE employee_id=? AND attendance_date=?',
       [req.user.id, today]
@@ -74,10 +121,18 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     if (mode === 'onsite') await removeUploadedSelfie();
 
     const enforce = !!Number(settings.enforce_location);
-    const reqIp = getClientIp(req); // backend-observed IP (LAN/loopback on same machine)
-    const clientPublicIp = req.body?.publicIp ? String(req.body.publicIp).trim() : null; // from ipify in browser
-    const bodyLat = req.body?.lat != null && req.body.lat !== '' ? Number(req.body.lat) : null;
-    const bodyLng = req.body?.lng != null && req.body.lng !== '' ? Number(req.body.lng) : null;
+
+    // ⚠️ SECURITY: the authoritative IP is what the SERVER saw on the socket.
+    // req.body.publicIp is kept only for logging/debugging. Do NOT use it
+    // for auth decisions — it is user-controllable.
+    const clientIp = getClientIp(req);
+    const bodyPublicIp = req.body?.publicIp
+      ? String(req.body.publicIp).trim()
+      : null;
+    const bodyLat =
+      req.body?.lat != null && req.body.lat !== '' ? Number(req.body.lat) : null;
+    const bodyLng =
+      req.body?.lng != null && req.body.lng !== '' ? Number(req.body.lng) : null;
 
     let method = mode === 'remote' ? 'remote' : 'manual';
     let verified = 0;
@@ -86,6 +141,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     let remoteSelfie = null;
 
     if (mode === 'remote') {
+      // ---------- REMOTE CLOCK-IN ----------
       const location = String(req.body?.remote_location || '').trim();
       if (!location || location.length > 255) {
         await removeUploadedSelfie();
@@ -94,15 +150,19 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
         });
       }
       if (!req.file) {
-        return res.status(400).json({ message: 'A selfie at your work location is required' });
+        return res.status(400).json({
+          message: 'A selfie at your work location is required',
+        });
       }
       if (
         bodyLat == null ||
         bodyLng == null ||
         !Number.isFinite(bodyLat) ||
         !Number.isFinite(bodyLng) ||
-        bodyLat < -90 || bodyLat > 90 ||
-        bodyLng < -180 || bodyLng > 180
+        bodyLat < -90 ||
+        bodyLat > 90 ||
+        bodyLng < -180 ||
+        bodyLng > 180
       ) {
         await removeUploadedSelfie();
         return res.status(400).json({
@@ -120,7 +180,9 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       if (now < workStart || now > workEnd) {
         await removeUploadedSelfie();
         return res.status(403).json({
-          message: `Remote clock-in is available between ${String(settings.work_start || '08:00:00').slice(0, 5)} and ${String(settings.work_end || '17:00:00').slice(0, 5)}.`,
+          message: `Remote clock-in is available between ${String(
+            settings.work_start || '08:00:00'
+          ).slice(0, 5)} and ${String(settings.work_end || '17:00:00').slice(0, 5)}.`,
           outsideWorkHours: true,
         });
       }
@@ -130,25 +192,19 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       method = 'remote';
       verified = 1;
     } else if (enforce) {
-      // ---------- ON-SITE LOCATION CHECK (IP AND GPS) ----------
-      const allowedIps = (settings.allowed_ips || '')
-        .split(',')
-        .map((x) => x.trim())
-        .filter(Boolean);
+      // ---------- ON-SITE LOCATION CHECK (IP + GPS) ----------
 
-      // --- 1) IP check (must pass) ---
-      // Prefer the browser-reported public IP; fall back to req.ip for direct connections.
-      const effectiveIp = clientPublicIp || reqIp;
-      if (!effectiveIp || allowedIps.length === 0 || !allowedIps.includes(effectiveIp)) {
+      // --- 1) IP check using server-observed IP (unspoofable) ---
+      if (!clientIp || !ipMatchesAllowList(clientIp, settings.allowed_ips)) {
         await removeUploadedSelfie();
         return res.status(403).json({
           message: 'You must be connected to the office Wi-Fi to clock in.',
           requiresOfficeWifi: true,
-          sawIp: effectiveIp, // helps debugging without exposing anything sensitive
+          sawIp: clientIp, // safe to expose for debugging
         });
       }
 
-      // --- 2) GPS check (must also pass) ---
+      // --- 2) GPS check ---
       if (
         bodyLat == null ||
         bodyLng == null ||
@@ -172,13 +228,14 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       if (distance > radius) {
         await removeUploadedSelfie();
         return res.status(403).json({
-          message: `You are ${Math.round(distance)}m from the office. Must be within ${radius}m to clock in.`,
+          message: `You are ${Math.round(
+            distance
+          )}m from the office. Must be within ${radius}m to clock in.`,
           distance: Math.round(distance),
           radius,
         });
       }
 
-      // Both passed
       method = 'ip+gps';
       verified = 1;
     } else {
@@ -208,7 +265,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
         status,
         bodyLat,
         bodyLng,
-        clientPublicIp || reqIp, // store the public IP that was actually validated
+        clientIp || bodyPublicIp || null, // prefer server-seen IP
         method,
         verified,
         mode,
@@ -239,8 +296,12 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       'SELECT * FROM attendance WHERE employee_id=? AND attendance_date=?',
       [req.user.id, today]
     );
-    if (!rows.length) return res.status(400).json({ message: 'You have not clocked in today' });
-    if (rows[0].clock_out) return res.status(400).json({ message: 'Already clocked out' });
+    if (!rows.length) {
+      return res.status(400).json({ message: 'You have not clocked in today' });
+    }
+    if (rows[0].clock_out) {
+      return res.status(400).json({ message: 'Already clocked out' });
+    }
 
     const tasksCompleted = String(req.body?.tasks_completed || '').trim();
     if (rows[0].clock_in_mode === 'remote' && !tasksCompleted) {
@@ -250,12 +311,14 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       });
     }
     if (tasksCompleted.length > 5000) {
-      return res.status(400).json({ message: 'Tasks completed must be 5000 characters or fewer' });
+      return res
+        .status(400)
+        .json({ message: 'Tasks completed must be 5000 characters or fewer' });
     }
 
     const [settings] = await pool.query('SELECT * FROM settings WHERE id=1');
     const now = new Date();
-    const [wh, wm] = settings[0].work_end.split(':');
+    const [wh, wm] = String(settings[0]?.work_end || '17:00:00').split(':');
     const workEnd = new Date();
     workEnd.setHours(+wh, +wm, 0, 0);
 
@@ -271,7 +334,8 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       );
       if (!reqs.length) {
         return res.status(403).json({
-          message: 'Early clock-out requires admin approval. Please submit a request.',
+          message:
+            'Early clock-out requires admin approval. Please submit a request.',
           requiresApproval: true,
         });
       }
@@ -280,7 +344,12 @@ router.post('/clock-out', verifyToken, async (req, res) => {
 
     await pool.query(
       'UPDATE attendance SET clock_out=?, early_leave_reason=?, tasks_completed=? WHERE id=?',
-      [localTimeString(now), reason, rows[0].clock_in_mode === 'remote' ? tasksCompleted : null, rows[0].id]
+      [
+        localTimeString(now),
+        reason,
+        rows[0].clock_in_mode === 'remote' ? tasksCompleted : null,
+        rows[0].id,
+      ]
     );
     res.json({ message: 'Clocked out' });
   } catch (err) {
@@ -341,7 +410,9 @@ router.post('/early-leave/request', verifyToken, async (req, res) => {
       [rows[0].id]
     );
     if (pending.length) {
-      return res.status(400).json({ message: 'You already have a pending early-leave request' });
+      return res
+        .status(400)
+        .json({ message: 'You already have a pending early-leave request' });
     }
 
     const outTime = localTimeString();
@@ -432,12 +503,14 @@ router.delete('/early-leave/:id', verifyToken, async (req, res) => {
     }
 
     if (rows[0].status !== 'pending') {
-      return res.status(400).json({
-        message: 'Only pending requests can be cancelled',
-      });
+      return res
+        .status(400)
+        .json({ message: 'Only pending requests can be cancelled' });
     }
 
-    await pool.query('DELETE FROM early_leave_requests WHERE id=?', [req.params.id]);
+    await pool.query('DELETE FROM early_leave_requests WHERE id=?', [
+      req.params.id,
+    ]);
     res.json({ message: 'Request cancelled' });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -457,9 +530,18 @@ router.get('/all', verifyToken, isAdmin, async (req, res) => {
   `;
   const params = [];
 
-  if (from) { sql += ' AND a.attendance_date >= ?'; params.push(from); }
-  if (to) { sql += ' AND a.attendance_date <= ?'; params.push(to); }
-  if (employee_id) { sql += ' AND a.employee_id = ?'; params.push(employee_id); }
+  if (from) {
+    sql += ' AND a.attendance_date >= ?';
+    params.push(from);
+  }
+  if (to) {
+    sql += ' AND a.attendance_date <= ?';
+    params.push(to);
+  }
+  if (employee_id) {
+    sql += ' AND a.employee_id = ?';
+    params.push(employee_id);
+  }
 
   sql += ' ORDER BY a.attendance_date DESC, e.full_name';
 
