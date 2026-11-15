@@ -1,15 +1,17 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Card, Table, Tag, Typography, Space, DatePicker, Row, Col, Statistic,
-  Select, Button, Grid, Empty, message, Badge,
+  Select, Button, Grid, Empty, message, Badge, Image, Modal, Descriptions, Divider,
 } from 'antd';
 import {
   ReloadOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  CloseCircleOutlined, CalendarOutlined, FileExcelOutlined,
+  CloseCircleOutlined, CalendarOutlined, EyeOutlined, EnvironmentOutlined,
+  CameraOutlined, FileTextOutlined, HomeOutlined, WifiOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import api from '../api/axios';
+import { API_ORIGIN } from '../config';
 
 dayjs.extend(isoWeek);
 
@@ -26,11 +28,11 @@ const statusColor = {
 };
 
 const STATUS_META = {
-  present: { accent: '#16a34a', bg: '#ecfdf5', text: '#065f46' },
-  late: { accent: '#d97706', bg: '#fffbeb', text: '#92400e' },
-  absent: { accent: '#dc2626', bg: '#fef2f2', text: '#991b1b' },
-  'half-day': { accent: '#1677ff', bg: '#eff6ff', text: '#1e40af' },
-  leave: { accent: '#7c3aed', bg: '#f5f3ff', text: '#5b21b6' },
+  present: { accent: '#16a34a', bg: '#ecfdf5', text: '#065f46', label: 'Present' },
+  late: { accent: '#d97706', bg: '#fffbeb', text: '#92400e', label: 'Late' },
+  absent: { accent: '#dc2626', bg: '#fef2f2', text: '#991b1b', label: 'Absent' },
+  'half-day': { accent: '#1677ff', bg: '#eff6ff', text: '#1e40af', label: 'Half Day' },
+  leave: { accent: '#7c3aed', bg: '#f5f3ff', text: '#5b21b6', label: 'Leave' },
 };
 
 const statusOptions = [
@@ -61,6 +63,7 @@ export default function AttendanceHistory() {
   const [range, setRange] = useState([dayjs().startOf('month'), dayjs()]);
   const [quickRange, setQuickRange] = useState('month');
   const [statusFilter, setStatusFilter] = useState([]);
+  const [viewing, setViewing] = useState(null);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -129,6 +132,7 @@ export default function AttendanceHistory() {
     return { total, present, late, absent };
   }, [filtered]);
 
+  // 5 core columns only — everything else moves to the detail modal
   const columns = [
     {
       title: 'Date',
@@ -159,16 +163,44 @@ export default function AttendanceHistory() {
       ),
     },
     {
+      title: 'Mode',
+      dataIndex: 'clock_in_mode',
+      key: 'clock_in_mode',
+      render: (v) => (
+        <Tag color={v === 'remote' ? 'purple' : 'blue'}>
+          {v === 'remote' ? 'Remote' : 'On-site'}
+        </Tag>
+      ),
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
       render: (v) => <Tag color={statusColor[v] || 'default'}>{v}</Tag>,
     },
+    {
+      title: '',
+      key: 'actions',
+      width: 90,
+      align: 'right',
+      render: (_, r) => (
+        <Button
+          type="primary"
+          ghost
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => setViewing(r)}
+        >
+          View
+        </Button>
+      ),
+    },
   ];
 
-  // ── Mobile record card ──────────────────────────────
+  // ── Mobile compact card — 5 fields + View button ──
   const renderMobileCard = (r) => {
     const meta = STATUS_META[r.status] || { accent: '#94a3b8', bg: '#f8fafc', text: '#475569' };
+    const isRemote = r.clock_in_mode === 'remote';
 
     return (
       <div
@@ -202,17 +234,14 @@ export default function AttendanceHistory() {
                 {String(r.attendance_date).slice(0, 10)}
               </div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                {isRemote ? 'Remote · ' : 'On-site · '}
                 {r.early_leave_reason ? 'Left early' : 'Full day'}
               </div>
             </div>
           </div>
           <Tag
             color={statusColor[r.status] || 'default'}
-            style={{
-              margin: 0, borderRadius: 10,
-              textTransform: 'capitalize', flexShrink: 0,
-              fontWeight: 600, fontSize: 11,
-            }}
+            style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize', flexShrink: 0, fontWeight: 600, fontSize: 11 }}
           >
             {r.status}
           </Tag>
@@ -252,25 +281,203 @@ export default function AttendanceHistory() {
           </div>
         </div>
 
-        {r.early_leave_reason && (
-          <div
-            style={{
-              fontSize: 11, color: '#92400e',
-              background: '#fffbeb', border: '1px solid #fde68a',
-              borderRadius: 8, padding: '8px 10px',
-              marginTop: 8,
-              wordBreak: 'break-word',
-              lineHeight: 1.4,
-            }}
-          >
-            <strong>Reason:</strong> {r.early_leave_reason}
-          </div>
-        )}
+        <Button
+          block
+          type="primary"
+          ghost
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => setViewing(r)}
+          style={{ marginTop: 10, borderRadius: 8 }}
+        >
+          View details
+        </Button>
       </div>
     );
   };
 
-  // ═══════════════ MOBILE LAYOUT (Ant Design preserved, clamped) ═══════════════
+  // ── Detail modal — full activity for one day ──
+  const renderDetailModal = () => {
+    if (!viewing) return null;
+    const r = viewing;
+    const meta = STATUS_META[r.status] || { label: r.status, accent: '#94a3b8' };
+    const isRemote = r.clock_in_mode === 'remote';
+    const hasCoord = r.clock_in_lat != null && r.clock_in_lng != null;
+
+    return (
+      <Modal
+        open={!!viewing}
+        onCancel={() => setViewing(null)}
+        footer={<Button onClick={() => setViewing(null)}>Close</Button>}
+        centered
+        width={isMobile ? 'calc(100vw - 24px)' : 620}
+        styles={{ body: { maxHeight: '75vh', overflowY: 'auto' } }}
+        title={
+          <Space>
+            <span>Attendance details</span>
+            <Tag color={statusColor[r.status] || 'default'} style={{ marginLeft: 6 }}>
+              {meta.label}
+            </Tag>
+          </Space>
+        }
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {/* Summary card */}
+          <Card
+            size="small"
+            bordered={false}
+            style={{
+              background: isRemote ? '#faf5ff' : '#eff6ff',
+              border: `1px solid ${isRemote ? '#e9d5ff' : '#bfdbfe'}`,
+              borderRadius: 12,
+            }}
+          >
+            <Space size={10} align="center">
+              {isRemote ? (
+                <HomeOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
+              ) : (
+                <WifiOutlined style={{ fontSize: 20, color: '#1677ff' }} />
+              )}
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
+                  {isRemote ? 'Remote work day' : 'On-site work day'}
+                </div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {String(r.attendance_date).slice(0, 10)}
+                </Text>
+              </div>
+            </Space>
+          </Card>
+
+          {/* Time block */}
+          <Descriptions
+            column={2}
+            size="small"
+            bordered
+            labelStyle={{ width: 120, background: '#f8fafc', fontWeight: 600 }}
+          >
+            <Descriptions.Item label="Clock in">
+              <Text strong style={{ color: '#16a34a' }}>{r.clock_in || '—'}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Clock out">
+              <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>
+                {r.clock_out || '—'}
+              </Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Status">
+              <Tag color={statusColor[r.status] || 'default'}>
+                {meta.label}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="Mode">
+              <Tag color={isRemote ? 'purple' : 'blue'}>
+                {isRemote ? 'Remote' : 'On-site'}
+              </Tag>
+            </Descriptions.Item>
+          </Descriptions>
+
+          {/* Remote-specific block */}
+          {isRemote && (
+            <>
+              <Divider style={{ margin: '4px 0' }}>Remote activity</Divider>
+
+              <Descriptions
+                column={1}
+                size="small"
+                bordered
+                labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
+              >
+                <Descriptions.Item
+                  label={<><EnvironmentOutlined /> Location</>}
+                >
+                  {r.remote_location || <Text type="secondary">Not recorded</Text>}
+                </Descriptions.Item>
+                <Descriptions.Item label="GPS coordinates">
+                  {hasCoord ? (
+                    <Text code style={{ fontSize: 12 }}>
+                      {r.clock_in_lat}, {r.clock_in_lng}
+                    </Text>
+                  ) : (
+                    <Text type="secondary">Not captured</Text>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item
+                  label={<><CameraOutlined /> Selfie</>}
+                >
+                  {r.remote_selfie ? (
+                    <Image
+                      src={API_ORIGIN + r.remote_selfie}
+                      alt="Remote clock-in selfie"
+                      width={160}
+                      style={{ borderRadius: 8, border: '1px solid #e2e8f0' }}
+                    />
+                  ) : (
+                    <Text type="secondary">Not uploaded</Text>
+                  )}
+                </Descriptions.Item>
+              </Descriptions>
+
+              <div>
+                <Space size={6} style={{ marginBottom: 8 }}>
+                  <FileTextOutlined style={{ color: '#065f46' }} />
+                  <Text strong>Tasks completed</Text>
+                </Space>
+                {r.tasks_completed ? (
+                  <div
+                    style={{
+                      background: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 10,
+                      padding: '12px 14px',
+                      fontSize: 13,
+                      lineHeight: 1.7,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      color: '#0f172a',
+                    }}
+                  >
+                    {r.tasks_completed}
+                  </div>
+                ) : (
+                  <Text type="secondary" style={{ fontSize: 13 }}>
+                    Not submitted yet.
+                  </Text>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Early leave block */}
+          {r.early_leave_reason && (
+            <>
+              <Divider style={{ margin: '4px 0' }}>Early leave</Divider>
+              <div
+                style={{
+                  background: '#fffbeb',
+                  border: '1px solid #fde68a',
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  color: '#92400e',
+                  wordBreak: 'break-word',
+                }}
+              >
+                <strong>Reason:</strong> {r.early_leave_reason}
+              </div>
+            </>
+          )}
+
+          {/* Audit footnote */}
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            Record ID #{r.id} · Logged on {String(r.created_at || '').slice(0, 19).replace('T', ' ')}
+          </Text>
+        </Space>
+      </Modal>
+    );
+  };
+
+  // ═══════════════ MOBILE LAYOUT ═══════════════
   if (isMobile) {
     return (
       <div
@@ -295,37 +502,17 @@ export default function AttendanceHistory() {
             min-width: 0 !important;
             box-sizing: border-box !important;
           }
-          .mobile-history .ant-picker {
-            width: 100% !important;
-          }
-          .mobile-history .ant-select {
-            width: 100% !important;
-          }
-          .mobile-history .ant-select-selector {
-            width: 100% !important;
-          }
-          .mobile-history .ant-picker-input > input {
-            font-size: 12px !important;
-          }
-          .mobile-history .ant-picker-range-separator {
-            padding: 0 4px !important;
-          }
-          .mobile-history .ant-btn {
-            min-width: 0;
-          }
-          /* Stack the range-picker calendar panels on mobile */
-          .mobile-history ~ .ant-picker-dropdown .ant-picker-panels {
-            flex-direction: column !important;
-          }
-          .ant-picker-dropdown {
-            max-width: 100vw;
-          }
-          .ant-picker-dropdown .ant-picker-panel-container {
-            max-width: calc(100vw - 16px);
-          }
+          .mobile-history .ant-picker { width: 100% !important; }
+          .mobile-history .ant-select { width: 100% !important; }
+          .mobile-history .ant-select-selector { width: 100% !important; }
+          .mobile-history .ant-picker-input > input { font-size: 12px !important; }
+          .mobile-history .ant-picker-range-separator { padding: 0 4px !important; }
+          .mobile-history .ant-btn { min-width: 0; }
+          .mobile-history ~ .ant-picker-dropdown .ant-picker-panels { flex-direction: column !important; }
+          .ant-picker-dropdown { max-width: 100vw; }
+          .ant-picker-dropdown .ant-picker-panel-container { max-width: calc(100vw - 16px); }
         `}</style>
 
-        {/* Title row */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 8 }}>
           <div style={{ minWidth: 0 }}>
             <Title level={4} style={{ margin: 0, color: '#065f46', fontSize: 18, lineHeight: 1.2 }}>
@@ -344,26 +531,12 @@ export default function AttendanceHistory() {
           />
         </div>
 
-        {/* ── Enhanced filter card (Ant Design) ── */}
         <Card
           bordered={false}
-          style={{
-            marginBottom: 14,
-            borderRadius: 14,
-            boxShadow: '0 4px 14px rgba(15,23,42,0.06)',
-          }}
+          style={{ marginBottom: 14, borderRadius: 14, boxShadow: '0 4px 14px rgba(15,23,42,0.06)' }}
           styles={{ body: { padding: 14 } }}
         >
-          {/* Quick period chips — Ant Buttons, wrapped in grid */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-              gap: 6,
-              marginBottom: 12,
-              width: '100%',
-            }}
-          >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6, marginBottom: 12, width: '100%' }}>
             {QUICK_OPTIONS.map((opt) => (
               <Button
                 key={opt.value}
@@ -371,12 +544,8 @@ export default function AttendanceHistory() {
                 type={quickRange === opt.value ? 'primary' : 'default'}
                 onClick={() => applyQuick(opt.value)}
                 style={{
-                  fontSize: 11,
-                  padding: 0,
-                  height: 32,
-                  borderRadius: 8,
-                  width: '100%',
-                  minWidth: 0,
+                  fontSize: 11, padding: 0, height: 32, borderRadius: 8,
+                  width: '100%', minWidth: 0,
                   fontWeight: quickRange === opt.value ? 600 : 500,
                 }}
               >
@@ -385,18 +554,8 @@ export default function AttendanceHistory() {
             ))}
           </div>
 
-          {/* Ant RangePicker — full width, clamped */}
           <div style={{ marginBottom: 12 }}>
-            <div
-              style={{
-                fontSize: 10,
-                color: '#64748b',
-                textTransform: 'uppercase',
-                letterSpacing: 0.6,
-                fontWeight: 600,
-                marginBottom: 6,
-              }}
-            >
+            <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 6 }}>
               Custom Range
             </div>
             <RangePicker
@@ -409,18 +568,8 @@ export default function AttendanceHistory() {
             />
           </div>
 
-          {/* Ant Select multiple — full width, clamped */}
           <div>
-            <div
-              style={{
-                fontSize: 10,
-                color: '#64748b',
-                textTransform: 'uppercase',
-                letterSpacing: 0.6,
-                fontWeight: 600,
-                marginBottom: 6,
-              }}
-            >
+            <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 6 }}>
               Status
             </div>
             <Select
@@ -438,28 +587,21 @@ export default function AttendanceHistory() {
           </div>
         </Card>
 
-        {/* Records list */}
         <div style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 32 }}>
               <Text type="secondary">Loading records...</Text>
             </div>
           ) : filtered.length === 0 ? (
-            <div
-              style={{
-                background: '#fff',
-                borderRadius: 12,
-                padding: 28,
-                boxShadow: '0 2px 10px rgba(15,23,42,0.06)',
-                textAlign: 'center',
-              }}
-            >
+            <div style={{ background: '#fff', borderRadius: 12, padding: 28, boxShadow: '0 2px 10px rgba(15,23,42,0.06)', textAlign: 'center' }}>
               <Empty description="No records in this range" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             </div>
           ) : (
             filtered.map(renderMobileCard)
           )}
         </div>
+
+        {renderDetailModal()}
       </div>
     );
   }
@@ -490,34 +632,10 @@ export default function AttendanceHistory() {
           <Col xs={24} md={12}>
             <Space wrap size={6}>
               <Text strong>Quick:</Text>
-              <Button
-                size="small"
-                type={quickRange === 'today' ? 'primary' : 'default'}
-                onClick={() => applyQuick('today')}
-              >
-                Today
-              </Button>
-              <Button
-                size="small"
-                type={quickRange === 'week' ? 'primary' : 'default'}
-                onClick={() => applyQuick('week')}
-              >
-                This Week
-              </Button>
-              <Button
-                size="small"
-                type={quickRange === 'month' ? 'primary' : 'default'}
-                onClick={() => applyQuick('month')}
-              >
-                This Month
-              </Button>
-              <Button
-                size="small"
-                type={quickRange === 'last30' ? 'primary' : 'default'}
-                onClick={() => applyQuick('last30')}
-              >
-                Last 30 days
-              </Button>
+              <Button size="small" type={quickRange === 'today' ? 'primary' : 'default'} onClick={() => applyQuick('today')}>Today</Button>
+              <Button size="small" type={quickRange === 'week' ? 'primary' : 'default'} onClick={() => applyQuick('week')}>This Week</Button>
+              <Button size="small" type={quickRange === 'month' ? 'primary' : 'default'} onClick={() => applyQuick('month')}>This Month</Button>
+              <Button size="small" type={quickRange === 'last30' ? 'primary' : 'default'} onClick={() => applyQuick('last30')}>Last 30 days</Button>
             </Space>
           </Col>
           <Col xs={24} md={12}>
@@ -554,41 +672,22 @@ export default function AttendanceHistory() {
       <Row gutter={[16, 16]} className="mb-4">
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Records"
-              value={stats.total}
-              prefix={<CalendarOutlined style={{ color: '#1677ff' }} />}
-            />
+            <Statistic title="Records" value={stats.total} prefix={<CalendarOutlined style={{ color: '#1677ff' }} />} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Present"
-              value={stats.present}
-              prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />}
-              valueStyle={{ color: '#16a34a' }}
-            />
+            <Statistic title="Present" value={stats.present} prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Late"
-              value={stats.late}
-              prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />}
-              valueStyle={{ color: '#d97706' }}
-            />
+            <Statistic title="Late" value={stats.late} prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />} valueStyle={{ color: '#d97706' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Absent"
-              value={stats.absent}
-              prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />}
-              valueStyle={{ color: '#dc2626' }}
-            />
+            <Statistic title="Absent" value={stats.absent} prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />} valueStyle={{ color: '#dc2626' }} />
           </Card>
         </Col>
       </Row>
@@ -613,6 +712,8 @@ export default function AttendanceHistory() {
           locale={{ emptyText: 'No records in this range' }}
         />
       </Card>
+
+      {renderDetailModal()}
     </div>
   );
 }

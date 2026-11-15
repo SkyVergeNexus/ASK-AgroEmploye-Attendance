@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   Card, Row, Col, Button, Typography, Space, Tag, Statistic, message,
   Table, Empty, Badge, Grid, Avatar, Alert, Modal, Input, Popconfirm,
@@ -7,7 +7,7 @@ import {
   LoginOutlined, LogoutOutlined, CheckCircleOutlined, ClockCircleOutlined,
   CloseCircleOutlined, UserOutlined, ReloadOutlined, DeleteOutlined,
   EnvironmentOutlined, WifiOutlined, CameraOutlined, HomeOutlined,
-  SafetyCertificateOutlined,
+  SafetyCertificateOutlined, PlusOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
@@ -72,7 +72,6 @@ export default function Dashboard() {
   const [clocking, setClocking] = useState(false);
   const [now, setNow] = useState(new Date());
 
-  // Pre-flight IP check from the backend (authoritative — server-side)
   const [ipCheck, setIpCheck] = useState(null);
   const [ipChecking, setIpChecking] = useState(false);
 
@@ -87,7 +86,16 @@ export default function Dashboard() {
   const [remoteLocation, setRemoteLocation] = useState('');
   const [remoteSelfie, setRemoteSelfie] = useState(null);
   const [selfiePreview, setSelfiePreview] = useState(null);
-  const [remoteTasks, setRemoteTasks] = useState('');
+  const [selfieCapturedAt, setSelfieCapturedAt] = useState(null);
+
+  const [taskInput, setTaskInput] = useState('');
+  const [remoteTasks, setRemoteTasks] = useState([]);
+
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraStream, setCameraStream] = useState(null);
+  const [cameraError, setCameraError] = useState(null);
+  const [cameraReady, setCameraReady] = useState(false);
+  const videoRef = useRef(null);
 
   const [geo, setGeo] = useState({
     status: 'idle',
@@ -148,7 +156,6 @@ export default function Dashboard() {
     checkIp();
   }, [load, checkIp]);
 
-  // Re-run the IP pre-flight whenever attendance state changes (e.g. after clock-in/out)
   useEffect(() => {
     checkIp();
   }, [today, checkIp]);
@@ -200,6 +207,94 @@ export default function Dashboard() {
     );
   }, [settings]);
 
+  // ═══════════ CAMERA CAPTURE ═══════════
+  const openCamera = async () => {
+    setCameraError(null);
+    setCameraReady(false);
+    setCameraOpen(true);
+
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera not supported by this browser');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+
+      setCameraStream(stream);
+    } catch (err) {
+      const msg =
+        err.name === 'NotAllowedError'
+          ? 'Camera permission denied. Allow camera access in your browser settings.'
+          : err.name === 'NotFoundError'
+          ? 'No camera found on this device.'
+          : err.message || 'Could not open camera';
+      setCameraError(msg);
+    }
+  };
+
+  const closeCamera = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+    }
+    setCameraStream(null);
+    setCameraOpen(false);
+    setCameraReady(false);
+    setCameraError(null);
+  };
+
+  useEffect(() => {
+    if (cameraOpen && cameraStream && videoRef.current) {
+      videoRef.current.srcObject = cameraStream;
+      videoRef.current.onloadedmetadata = () => {
+        videoRef.current.play().catch(() => {});
+        setCameraReady(true);
+      };
+    }
+  }, [cameraOpen, cameraStream]);
+
+  useEffect(() => {
+    if (!cameraOpen && cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+      setCameraStream(null);
+    }
+  }, [cameraOpen, cameraStream]);
+
+  const captureFromCamera = async () => {
+    const video = videoRef.current;
+    if (!video || !cameraReady) return;
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      const ctx = canvas.getContext('2d');
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, 'image/jpeg', 0.9)
+      );
+
+      if (!blob) throw new Error('Failed to capture photo');
+
+      const file = new File([blob], `selfie_${Date.now()}.jpg`, {
+        type: 'image/jpeg',
+      });
+
+      setRemoteSelfie(file);
+      setSelfieCapturedAt(new Date());
+      closeCamera();
+      message.success('Photo captured');
+    } catch (err) {
+      message.error(err.message || 'Capture failed');
+    }
+  };
+
+  // ═══════════ TODAY'S REQUESTS ═══════════
   const todaysRequests = useMemo(() => {
     if (!today) return [];
     const todayStr = localDateString();
@@ -214,16 +309,13 @@ export default function Dashboard() {
   const rejectedEarly = todaysRequests.find((r) => r.status === 'rejected');
 
   // ═══════════ CLOCK IN ═══════════
-  // NOTE: We no longer send publicIp from the client.
-  // The server uses req.ip (from the socket / x-forwarded-for) as the
-  // authoritative source. Client-supplied IPs are unspoofable-safe ignored.
   const clockIn = async (mode = 'onsite') => {
     if (mode === 'remote' && !remoteLocation.trim()) {
       message.error('Enter the location where you are working today');
       return;
     }
     if (mode === 'remote' && !remoteSelfie) {
-      message.error('Take or upload a selfie at your work location');
+      message.error('Take a live selfie with your camera before clocking in');
       return;
     }
     setClocking(true);
@@ -258,9 +350,11 @@ export default function Dashboard() {
         formData.append('lat', String(coords.lat));
         formData.append('lng', String(coords.lng));
         formData.append('selfie', remoteSelfie);
+        if (selfieCapturedAt) {
+          formData.append('captured_at', selfieCapturedAt.toISOString());
+        }
         await api.post('/attendance/clock-in', formData);
       } else {
-        // Server determines IP; no client field needed
         await api.post('/attendance/clock-in', {
           mode: 'onsite',
           ...(coords || {}),
@@ -271,6 +365,7 @@ export default function Dashboard() {
       setRemoteClockInOpen(false);
       setRemoteLocation('');
       setRemoteSelfie(null);
+      setSelfieCapturedAt(null);
       load();
     } catch (e) {
       const data = e.response?.data;
@@ -284,31 +379,40 @@ export default function Dashboard() {
         sawIp: data?.sawIp,
       });
       message.error(msg);
-      // Re-check IP so the banner reflects reality after a rejection
       checkIp();
     } finally {
       setClocking(false);
     }
   };
 
-  const clockOut = async (tasksCompleted) => {
-    if (today?.clock_in_mode === 'remote' && tasksCompleted === undefined) {
+  // ═══════════ CLOCK OUT ═══════════
+  const clockOut = async (tasksList) => {
+    const hasTasksArg = Array.isArray(tasksList);
+
+    if (today?.clock_in_mode === 'remote' && !hasTasksArg) {
       setRemoteClockOutOpen(true);
       return;
     }
-    if (today?.clock_in_mode === 'remote' && !tasksCompleted?.trim()) {
-      message.error('Please enter the tasks you completed today');
+
+    if (today?.clock_in_mode === 'remote' && hasTasksArg && tasksList.length === 0) {
+      message.error('Add at least one completed task before clocking out');
       return;
     }
 
+    const tasksText = hasTasksArg
+      ? tasksList.map((t, i) => `${i + 1}. ${t}`).join('\n')
+      : null;
+
     setClocking(true);
     try {
-      await api.post('/attendance/clock-out', tasksCompleted === undefined
-        ? {}
-        : { tasks_completed: tasksCompleted.trim() });
+      await api.post(
+        '/attendance/clock-out',
+        hasTasksArg ? { tasks_completed: tasksText } : {}
+      );
       message.success('Clocked out!');
       setRemoteClockOutOpen(false);
-      setRemoteTasks('');
+      setRemoteTasks([]);
+      setTaskInput('');
       load();
     } catch (e) {
       const data = e.response?.data;
@@ -324,6 +428,37 @@ export default function Dashboard() {
     }
   };
 
+  // ═══════════ TASK LIST HANDLERS ═══════════
+  const addTask = () => {
+    const trimmed = taskInput.trim();
+    if (!trimmed) {
+      message.warning('Type a task before adding');
+      return;
+    }
+    if (trimmed.length > 500) {
+      message.warning('Each task must be 500 characters or fewer');
+      return;
+    }
+    setRemoteTasks((prev) => [...prev, trimmed]);
+    setTaskInput('');
+  };
+
+  const removeTask = (index) => {
+    setRemoteTasks((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const editTask = (index, value) => {
+    setRemoteTasks((prev) => prev.map((t, i) => (i === index ? value : t)));
+  };
+
+  const handleTaskInputKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      addTask();
+    }
+  };
+
+  // ═══════════ EARLY LEAVE ═══════════
   const submitEarlyRequest = async () => {
     if (!earlyReason.trim()) {
       return message.error('Please provide a reason');
@@ -365,12 +500,19 @@ export default function Dashboard() {
     geo.status === 'no-office' ||
     geo.status === 'checking';
 
+  // ═══════════ Flags ═══════════
   const enforceLocation = !!Number(settings?.enforce_location);
-  const ipAllowed = ipCheck ? ipCheck.allowed !== false : true; // default true if check failed
   const ipEnforced = ipCheck?.enforce === true;
+  const enforceNetwork = !!Number(settings?.enforce_network);
+
+  const networkIsEnforced = ipCheck ? ipEnforced : enforceNetwork;
+  const ipAllowed = ipCheck ? ipCheck.allowed !== false : true;
 
   const canClockIn = !today;
-  const canClockInOnsite = canClockIn && !locationBlocked && (ipEnforced ? ipAllowed : true);
+  const canClockInOnsite =
+    canClockIn &&
+    (!enforceLocation || !locationBlocked) &&
+    (!networkIsEnforced || ipAllowed);
   const canClockOut = today && !today.clock_out && !pendingEarly;
 
   const picUrl = user?.profile_picture
@@ -467,7 +609,6 @@ export default function Dashboard() {
     },
   ];
 
-  // ── Mobile-friendly history row ──────────────────────────
   const renderMobileRecord = (r) => (
     <div
       key={r.id}
@@ -731,8 +872,7 @@ export default function Dashboard() {
           </Button>
         }
       >
-        {/* ── Pre-flight IP check banner ── */}
-        {!today && ipEnforced && ipCheck && (
+        {!today && networkIsEnforced && ipCheck && (
           <>
             {ipCheck.allowed ? (
               <Alert
@@ -779,7 +919,6 @@ export default function Dashboard() {
               clockInError.requiresOfficeWifi ? (
                 <>
                   <Text strong>Connect to the office Wi-Fi network</Text> and try again.
-                  Only devices on the office network can clock in.
                   {clockInError.sawIp && (
                     <div style={{ marginTop: 4, fontSize: 12 }}>
                       <Text type="secondary">Your current IP: </Text>
@@ -798,52 +937,62 @@ export default function Dashboard() {
           />
         )}
 
-        {!today && enforceLocation && (
+        {!today && (enforceLocation || networkIsEnforced) && (
           <Alert
             type="info"
             showIcon
-            icon={<WifiOutlined />}
+            icon={networkIsEnforced ? <WifiOutlined /> : <EnvironmentOutlined />}
             style={{ marginBottom: 12 }}
-            title="Two conditions must pass to clock in"
+            title={
+              enforceLocation && networkIsEnforced
+                ? 'Two conditions must pass to clock in'
+                : networkIsEnforced
+                ? 'Office network check is on'
+                : 'GPS geofence check is on'
+            }
             description={
               <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-                <div>
-                  <strong>1. Office Wi-Fi</strong> — your device must be on the
-                  office network. GPS alone is not enough.
-                  {ipCheck && (
-                    <>
-                      {' '}
-                      {ipCheck.allowed ? (
-                        <Tag color="green">✓ network OK</Tag>
-                      ) : (
-                        <Tag color="red">✗ not on office network</Tag>
-                      )}
-                    </>
-                  )}
-                </div>
-                <div>
-                  <strong>2. Inside GPS radius</strong>{' '}
-                  {geo.status === 'inside' && (
-                    <Tag color="green">✓ {geo.distance}m</Tag>
-                  )}
-                  {geo.status === 'outside' && (
-                    <Tag color="orange">✗ {geo.distance}m (max {geo.radius}m)</Tag>
-                  )}
-                  {geo.status === 'checking' && <Tag>checking…</Tag>}
-                  {geo.status === 'denied' && <Tag color="red">GPS denied</Tag>}
-                  {geo.status === 'unsupported' && (
-                    <Tag color="red">GPS unsupported</Tag>
-                  )}
-                  {geo.status === 'no-office' && (
-                    <Tag color="orange">not configured</Tag>
-                  )}
-                </div>
+                {networkIsEnforced && (
+                  <div>
+                    <strong>1. Office Wi-Fi</strong> — your device must be on the
+                    office network.
+                    {ipCheck && (
+                      <>
+                        {' '}
+                        {ipCheck.allowed ? (
+                          <Tag color="green">✓ network OK</Tag>
+                        ) : (
+                          <Tag color="red">✗ not on office network</Tag>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                {enforceLocation && (
+                  <div>
+                    <strong>{networkIsEnforced ? '2.' : '1.'} Inside GPS radius</strong>{' '}
+                    {geo.status === 'inside' && (
+                      <Tag color="green">✓ {geo.distance}m</Tag>
+                    )}
+                    {geo.status === 'outside' && (
+                      <Tag color="orange">✗ {geo.distance}m (max {geo.radius}m)</Tag>
+                    )}
+                    {geo.status === 'checking' && <Tag>checking…</Tag>}
+                    {geo.status === 'denied' && <Tag color="red">GPS denied</Tag>}
+                    {geo.status === 'unsupported' && (
+                      <Tag color="red">GPS unsupported</Tag>
+                    )}
+                    {geo.status === 'no-office' && (
+                      <Tag color="orange">not configured</Tag>
+                    )}
+                  </div>
+                )}
               </div>
             }
           />
         )}
 
-        {!today && geo.status === 'checking' && (
+        {!today && enforceLocation && geo.status === 'checking' && (
           <Alert
             type="info"
             showIcon
@@ -853,7 +1002,7 @@ export default function Dashboard() {
             description="Verifying you are at the office before enabling clock-in."
           />
         )}
-        {!today && geo.status === 'outside' && (
+        {!today && enforceLocation && geo.status === 'outside' && (
           <Alert
             type="warning"
             showIcon
@@ -863,7 +1012,7 @@ export default function Dashboard() {
             description={`You must be within ${geo.radius}m to clock in. Move closer to the office.`}
           />
         )}
-        {!today && geo.status === 'denied' && (
+        {!today && enforceLocation && geo.status === 'denied' && (
           <Alert
             type="warning"
             showIcon
@@ -873,7 +1022,7 @@ export default function Dashboard() {
             description="Enable location access in your browser to clock in."
           />
         )}
-        {!today && geo.status === 'unsupported' && (
+        {!today && enforceLocation && geo.status === 'unsupported' && (
           <Alert
             type="warning"
             showIcon
@@ -883,7 +1032,7 @@ export default function Dashboard() {
             description="Your browser doesn't support GPS."
           />
         )}
-        {!today && geo.status === 'no-office' && (
+        {!today && enforceLocation && geo.status === 'no-office' && (
           <Alert
             type="warning"
             showIcon
@@ -952,7 +1101,6 @@ export default function Dashboard() {
           />
         )}
 
-        {/* ── Stat row ── */}
         {isMobile ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
             <div
@@ -1085,7 +1233,6 @@ export default function Dashboard() {
           </Row>
         )}
 
-        {/* ═══════════ Clock In / Clock Out buttons ═══════════ */}
         <Space wrap>
           <Button
             type="primary"
@@ -1101,7 +1248,7 @@ export default function Dashboard() {
           <Button
             size="large"
             icon={<LogoutOutlined />}
-            onClick={clockOut}
+            onClick={() => clockOut()}
             disabled={!canClockOut}
             loading={clocking && canClockOut}
             danger
@@ -1159,9 +1306,11 @@ export default function Dashboard() {
               </Button>
               {!canClockInOnsite && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  {ipEnforced && !ipAllowed
+                  {networkIsEnforced && !ipAllowed
                     ? 'You must be on the office Wi-Fi network.'
-                    : 'Office Wi-Fi and location checks must pass.'}
+                    : enforceLocation && locationBlocked
+                    ? 'You must be within the office GPS radius.'
+                    : 'Office checks must pass.'}
                 </Text>
               )}
             </Space>
@@ -1171,7 +1320,7 @@ export default function Dashboard() {
               <HomeOutlined style={{ color: '#15803d', fontSize: 22 }} />
               <Text strong>Remote</Text>
               <Text type="secondary" style={{ minHeight: 40 }}>
-                Submit your work location, a selfie, and your current GPS location.
+                Submit your work location, a live selfie, and your current GPS location.
               </Text>
               <Button
                 type="primary"
@@ -1189,6 +1338,7 @@ export default function Dashboard() {
         </div>
       </Modal>
 
+      {/* ═══════════ Remote clock-in modal ═══════════ */}
       <Modal
         open={remoteClockInOpen}
         title="Remote clock-in"
@@ -1197,7 +1347,11 @@ export default function Dashboard() {
         confirmLoading={clocking}
         okButtonProps={{ disabled: !remoteLocation.trim() || !remoteSelfie }}
         onOk={() => clockIn('remote')}
-        onCancel={() => setRemoteClockInOpen(false)}
+        onCancel={() => {
+          setRemoteClockInOpen(false);
+          setRemoteSelfie(null);
+          setSelfieCapturedAt(null);
+        }}
         centered
         width={isMobile ? 'calc(100vw - 24px)' : 520}
         styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
@@ -1209,8 +1363,8 @@ export default function Dashboard() {
             title="Remote attendance check"
             description={
               settings?.work_start && settings?.work_end
-                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Allow GPS and take a selfie at your work location.`
-                : 'Allow GPS and take a selfie at your work location during working hours.'
+                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Allow GPS and take a live selfie at your work location.`
+                : 'Allow GPS and take a live selfie at your work location during working hours.'
             }
           />
           <div>
@@ -1225,9 +1379,9 @@ export default function Dashboard() {
             />
           </div>
           <div>
-            <Text strong>Selfie at your work location</Text>
+            <Text strong>Live selfie at your work location</Text>
             <Text type="secondary" style={{ display: 'block', marginTop: 2, marginBottom: 8 }}>
-              Use your camera or choose a recent photo (JPG, PNG or WEBP; up to 5 MB).
+              You must take the photo now — uploading from your gallery is disabled to prevent old photos.
             </Text>
             {selfiePreview ? (
               <div>
@@ -1236,71 +1390,268 @@ export default function Dashboard() {
                   alt="Remote work location selfie preview"
                   style={{ display: 'block', width: '100%', maxHeight: 240, objectFit: 'cover', borderRadius: 10 }}
                 />
-                <Button type="link" danger onClick={() => setRemoteSelfie(null)} style={{ paddingLeft: 0 }}>
-                  Remove photo
-                </Button>
+                {selfieCapturedAt && (
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+                    Captured at {selfieCapturedAt.toLocaleTimeString()}
+                  </Text>
+                )}
+                <Space style={{ marginTop: 8 }}>
+                  <Button icon={<CameraOutlined />} onClick={openCamera} size="small">
+                    Retake
+                  </Button>
+                  <Button
+                    type="link"
+                    danger
+                    onClick={() => {
+                      setRemoteSelfie(null);
+                      setSelfieCapturedAt(null);
+                    }}
+                    style={{ paddingLeft: 0 }}
+                  >
+                    Remove photo
+                  </Button>
+                </Space>
               </div>
             ) : (
-              <label
-                htmlFor="remote-selfie-input"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 10,
-                  minHeight: 104,
-                  padding: 16,
-                  border: '1px dashed #86efac',
-                  borderRadius: 10,
-                  background: '#f0fdf4',
-                  color: '#166534',
-                  textAlign: 'center',
-                  cursor: 'pointer',
-                }}
-              >
-                <CameraOutlined style={{ fontSize: 22 }} />
-                <span>Take a selfie or choose a photo</span>
-                <input
-                  id="remote-selfie-input"
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  capture="user"
-                  onChange={(e) => setRemoteSelfie(e.target.files?.[0] || null)}
-                  style={{ display: 'none' }}
-                />
-              </label>
+              <div>
+                <Button
+                  type="primary"
+                  icon={<CameraOutlined />}
+                  onClick={openCamera}
+                  block
+                  size="large"
+                  style={{ backgroundColor: '#15803d', height: 52, fontSize: 15, fontWeight: 600 }}
+                >
+                  Open camera
+                </Button>
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: '8px 12px',
+                    background: '#fffbeb',
+                    border: '1px solid #fde68a',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    color: '#92400e',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong>Note:</strong> you must take a live photo with the camera.
+                  Gallery uploads are disabled for security.
+                </div>
+              </div>
             )}
           </div>
         </Space>
       </Modal>
 
+      {/* ═══════════ Camera capture modal ═══════════ */}
+      <Modal
+        open={cameraOpen}
+        title="Take a selfie"
+        onCancel={closeCamera}
+        footer={null}
+        centered
+        width={isMobile ? 'calc(100vw - 24px)' : 560}
+        destroyOnClose
+        styles={{ body: { padding: 12 } }}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {cameraError ? (
+            <Alert
+              type="error"
+              showIcon
+              title="Camera unavailable"
+              description={cameraError}
+            />
+          ) : (
+            <div
+              style={{
+                position: 'relative',
+                width: '100%',
+                background: '#000',
+                borderRadius: 12,
+                overflow: 'hidden',
+                aspectRatio: '4 / 3',
+              }}
+            >
+              <video
+                ref={videoRef}
+                playsInline
+                muted
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  display: 'block',
+                  transform: 'scaleX(-1)',
+                }}
+              />
+              {!cameraReady && !cameraError && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    fontSize: 13,
+                  }}
+                >
+                  Starting camera…
+                </div>
+              )}
+            </div>
+          )}
+
+          <Space style={{ width: '100%', justifyContent: 'center' }} size="middle">
+            <Button onClick={closeCamera}>Cancel</Button>
+            <Button
+              type="primary"
+              size="large"
+              icon={<CameraOutlined />}
+              onClick={captureFromCamera}
+              disabled={!cameraReady || !!cameraError}
+              style={{ minWidth: 160, backgroundColor: cameraReady ? '#15803d' : undefined }}
+            >
+              Capture
+            </Button>
+          </Space>
+
+          {cameraError && (
+            <Alert
+              type="warning"
+              showIcon
+              title="Camera problem"
+              description="If your camera keeps failing, contact your administrator. Gallery uploads are disabled for security reasons."
+            />
+          )}
+        </Space>
+      </Modal>
+
+      {/* ═══════════ Remote clock-out modal with task list ═══════════ */}
       <Modal
         open={remoteClockOutOpen}
         title="Tasks completed today"
         okText="Submit & clock out"
         cancelText="Cancel"
         confirmLoading={clocking}
-        okButtonProps={{ disabled: !remoteTasks.trim() }}
+        okButtonProps={{ disabled: remoteTasks.length === 0 }}
         onOk={() => clockOut(remoteTasks)}
-        onCancel={() => setRemoteClockOutOpen(false)}
+        onCancel={() => {
+          setRemoteClockOutOpen(false);
+          setRemoteTasks([]);
+          setTaskInput('');
+        }}
         centered
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
+        width={isMobile ? 'calc(100vw - 24px)' : 560}
+        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Alert
             type="info"
             showIcon
             title="A daily work summary is required"
-            description="List the tasks you completed before submitting your remote clock-out."
+            description="Add each task you completed today. Your entries are numbered automatically."
           />
-          <TextArea
-            value={remoteTasks}
-            onChange={(e) => setRemoteTasks(e.target.value)}
-            placeholder="Describe the work completed today…"
-            rows={5}
-            maxLength={5000}
-            showCount
-          />
+
+          <div>
+            <Text strong>Add a completed task</Text>
+            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+              <Input
+                value={taskInput}
+                onChange={(e) => setTaskInput(e.target.value)}
+                onKeyDown={handleTaskInputKeyDown}
+                placeholder="e.g. Visited client farm in Nsawam"
+                maxLength={500}
+                allowClear
+              />
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={addTask}
+                disabled={!taskInput.trim()}
+              >
+                Add
+              </Button>
+            </div>
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+              Press Enter to add quickly.
+            </Text>
+          </div>
+
+          {remoteTasks.length > 0 && (
+            <div>
+              <Text strong>
+                Your tasks ({remoteTasks.length})
+              </Text>
+              <div style={{ marginTop: 8 }}>
+                {remoteTasks.map((task, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '10px 12px',
+                      background: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 10,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: 13,
+                        background: '#065f46',
+                        color: '#fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {index + 1}
+                    </div>
+                    <Input
+                      value={task}
+                      onChange={(e) => editTask(index, e.target.value)}
+                      variant="borderless"
+                      style={{ flex: 1, padding: 0, fontSize: 13 }}
+                      maxLength={500}
+                    />
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      onClick={() => removeTask(index)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {remoteTasks.length === 0 && (
+            <div
+              style={{
+                padding: '20px 16px',
+                textAlign: 'center',
+                color: '#94a3b8',
+                fontSize: 13,
+                border: '1px dashed #e2e8f0',
+                borderRadius: 10,
+              }}
+            >
+              No tasks added yet. Type a task above and click <strong>Add</strong>.
+            </div>
+          )}
         </Space>
       </Modal>
 
@@ -1343,7 +1694,7 @@ export default function Dashboard() {
         )}
       </Card>
 
-      {/* ═══════════ Early clock-out request modal ═══════════ */}
+      {/* ═══════════ Early clock-out modal ═══════════ */}
       <Modal
         open={earlyModalOpen}
         title="Request early clock-out"

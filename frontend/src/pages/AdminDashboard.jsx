@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Card, Statistic, Row, Col, Table, Tag, Button, Typography, Space, Badge,
+  Card, Statistic, Row, Col, Tag, Button, Typography, Space, Badge,
   Divider, Descriptions, Empty, message, List, Alert,
 } from 'antd';
 import {
@@ -16,18 +16,14 @@ import {
   FileTextOutlined,
   WarningOutlined,
   ArrowRightOutlined,
+  LoginOutlined,
+  LogoutOutlined,
+  CheckOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 
 const { Title, Text } = Typography;
-
-const statusColor = {
-  present: 'green',
-  late: 'gold',
-  absent: 'red',
-  'half-day': 'blue',
-  leave: 'purple',
-};
 
 // Use LOCAL date (not UTC) so today's key matches the server's date
 const getTodayKey = () => {
@@ -38,36 +34,42 @@ const getTodayKey = () => {
   return `${y}-${m}-${day}`;
 };
 
+// Activity event filter chips
+const FEED_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'clock', label: 'Clock' },
+  { key: 'early', label: 'Early leaves' },
+  { key: 'registration', label: 'Registrations' },
+];
+
 export default function AdminDashboard() {
   const [dayKey, setDayKey] = useState(getTodayKey());
   const [stats, setStats] = useState({
     total: 0, present: 0, late: 0, absent: 0, pending_early_leaves: 0,
   });
-  const [todayRows, setTodayRows] = useState([]);
   const [earlyRequests, setEarlyRequests] = useState([]);
+  const [activity, setActivity] = useState([]);
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [feedFilter, setFeedFilter] = useState('all');
 
   const load = useCallback(async (dateKey) => {
     setLoading(true);
     try {
-      const [statsRes, todayRes, settingsRes, earlyRes] = await Promise.all([
+      const [statsRes, settingsRes, earlyRes, activityRes] = await Promise.all([
         api.get('/attendance/stats'),
-        api.get('/attendance/all', { params: { from: dateKey, to: dateKey } }),
         api.get('/settings'),
         api.get('/attendance/early-leave/all', { params: { status: 'pending' } }),
+        api.get('/attendance/activity-feed', {
+          params: { from: dateKey, to: dateKey, limit: 150 },
+        }),
       ]);
 
-      const onlyToday = (todayRes.data || []).filter((r) => {
-        const rowDate = String(r.attendance_date).slice(0, 10);
-        return rowDate === dateKey;
-      });
-
       setStats(statsRes.data);
-      setTodayRows(onlyToday);
       setSettings(settingsRes.data);
       setEarlyRequests(earlyRes.data || []);
+      setActivity(activityRes.data || []);
       setLastUpdated(new Date());
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load dashboard');
@@ -81,7 +83,7 @@ export default function AdminDashboard() {
     const tick = () => {
       const current = getTodayKey();
       if (current !== dayKey) {
-        setTodayRows([]);
+        setActivity([]);
         setEarlyRequests([]);
         setDayKey(current);
       }
@@ -97,58 +99,186 @@ export default function AdminDashboard() {
     return () => clearInterval(timer);
   }, [dayKey, load]);
 
-  const displayRows = useMemo(() => {
-    return todayRows.filter(
-      (r) => String(r.attendance_date).slice(0, 10) === dayKey
-    );
-  }, [todayRows, dayKey]);
-
-  const columns = [
-    {
-      title: 'Employee',
-      dataIndex: 'full_name',
-      key: 'full_name',
-      render: (text, row) => (
-        <div>
-          <div className="font-medium">{text}</div>
-          <div className="text-xs text-gray-500">{row.employee_code}</div>
-        </div>
-      ),
-    },
-    {
-      title: 'Department',
-      dataIndex: 'department',
-      key: 'department',
-      render: (v) => v || '—',
-    },
-    {
-      title: 'Clock In',
-      dataIndex: 'clock_in',
-      key: 'clock_in',
-      render: (v) => v || <Text type="secondary">—</Text>,
-    },
-    {
-      title: 'Clock Out',
-      dataIndex: 'clock_out',
-      key: 'clock_out',
-      render: (v, r) => (
-        <Space size={4}>
-          {v || <Text type="secondary">—</Text>}
-          {r.early_leave_reason && (
-            <Tag color="orange" style={{ marginLeft: 4 }}>early</Tag>
-          )}
-        </Space>
-      ),
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (v) => <Tag color={statusColor[v] || 'default'}>{v}</Tag>,
-    },
-  ];
+  // Filtered feed based on chip selection
+  const filteredActivity = useMemo(() => {
+    if (feedFilter === 'all') return activity;
+    if (feedFilter === 'clock') {
+      return activity.filter((e) => e.kind === 'clock-in' || e.kind === 'clock-out');
+    }
+    if (feedFilter === 'early') {
+      return activity.filter((e) => e.kind.startsWith('early'));
+    }
+    if (feedFilter === 'registration') {
+      return activity.filter((e) => e.kind === 'registration');
+    }
+    return activity;
+  }, [activity, feedFilter]);
 
   const pendingCount = earlyRequests.length;
+
+  // ── Render a single activity item ──────────────────────────
+  const renderActivityItem = (ev) => {
+    const time = ev.at
+      ? new Date(ev.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : '—';
+
+    const baseStyle = {
+      width: 34, height: 34, borderRadius: 9,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: 15, flexShrink: 0,
+    };
+
+    const renderIcon = () => {
+      switch (ev.kind) {
+        case 'clock-in':
+          return <div style={{ ...baseStyle, background: '#ecfdf5', color: '#16a34a' }}><LoginOutlined /></div>;
+        case 'clock-out':
+          return <div style={{ ...baseStyle, background: '#fffbeb', color: '#d97706' }}><LogoutOutlined /></div>;
+        case 'early-request':
+          return <div style={{ ...baseStyle, background: '#fef3c7', color: '#b45309' }}><ClockCircleOutlined /></div>;
+        case 'early-approved':
+          return <div style={{ ...baseStyle, background: '#ecfdf5', color: '#16a34a' }}><CheckOutlined /></div>;
+        case 'early-rejected':
+          return <div style={{ ...baseStyle, background: '#fef2f2', color: '#dc2626' }}><CloseOutlined /></div>;
+        case 'registration':
+          return <div style={{ ...baseStyle, background: '#eff6ff', color: '#1677ff' }}><UserAddOutlined /></div>;
+        default:
+          return <div style={{ ...baseStyle, background: '#f8fafc', color: '#64748b' }}><ReloadOutlined /></div>;
+      }
+    };
+
+    const name = ev.employee?.full_name || 'Unknown';
+    const code = ev.employee?.employee_code;
+    const dept = ev.employee?.department;
+
+    const renderBody = () => {
+      switch (ev.kind) {
+        case 'clock-in':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong> clocked in
+                {ev.meta?.mode === 'remote' && (
+                  <> <Tag color="purple" style={{ marginLeft: 4, fontSize: 10 }}>Remote</Tag></>
+                )}
+                {ev.meta?.status === 'late' && (
+                  <> <Tag color="gold" style={{ marginLeft: 2, fontSize: 10 }}>Late</Tag></>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                {ev.meta?.time}{code ? ` · ${code}` : ''}{dept ? ` · ${dept}` : ''}
+              </div>
+            </>
+          );
+
+        case 'clock-out':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong> clocked out
+                {ev.meta?.early && (
+                  <> <Tag color="orange" style={{ marginLeft: 4, fontSize: 10 }}>Early</Tag></>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                {ev.meta?.time}{code ? ` · ${code}` : ''}
+              </div>
+              {ev.meta?.early_reason && (
+                <div style={{ fontSize: 11, color: '#92400e', marginTop: 3, fontStyle: 'italic' }}>
+                  "{ev.meta.early_reason}"
+                </div>
+              )}
+            </>
+          );
+
+        case 'early-request':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong> requested early leave
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                Wants out at <strong>{ev.meta?.requested_out_time}</strong>{code ? ` · ${code}` : ''}
+              </div>
+              {ev.meta?.reason && (
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, fontStyle: 'italic' }}>
+                  "{ev.meta.reason}"
+                </div>
+              )}
+            </>
+          );
+
+        case 'early-approved':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong>'s early leave <Text type="success">approved</Text>
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                by {ev.meta?.decided_by_name || 'admin'} · out at {ev.meta?.requested_out_time}
+              </div>
+            </>
+          );
+
+        case 'early-rejected':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong>'s early leave <Text type="danger">rejected</Text>
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                by {ev.meta?.decided_by_name || 'admin'}
+              </div>
+              {ev.meta?.admin_note && (
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, fontStyle: 'italic' }}>
+                  "{ev.meta.admin_note}"
+                </div>
+              )}
+            </>
+          );
+
+        case 'registration':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong> registered
+                {!ev.meta?.is_approved && (
+                  <> <Tag color="orange" style={{ marginLeft: 4, fontSize: 10 }}>Pending</Tag></>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                {code}{dept ? ` · ${dept}` : ''}
+              </div>
+              {ev.meta?.email && (
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                  {ev.meta.email}
+                </div>
+              )}
+            </>
+          );
+
+        default:
+          return <div>{name} — {ev.kind}</div>;
+      }
+    };
+
+    return (
+      <div
+        key={ev.id}
+        style={{
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+          padding: '12px 0',
+          borderBottom: '1px solid #f1f5f9',
+        }}
+      >
+        {renderIcon()}
+        <div style={{ flex: 1, minWidth: 0 }}>{renderBody()}</div>
+        <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {time}
+        </Text>
+      </div>
+    );
+  };
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-6">
@@ -252,10 +382,12 @@ export default function AdminDashboard() {
       {/* Main content */}
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={16}>
+          {/* ═══════════════ LIVE ACTIVITY FEED ═══════════════ */}
           <Card
             title={
-              <Space>
-                <span>Today's Attendance</span>
+              <Space wrap>
+                <span>Today's Activity</span>
+                <Badge count={activity.length} showZero color="#065f46" />
                 <Text type="secondary" style={{ fontWeight: 'normal', fontSize: 12 }}>
                   {dayKey}
                 </Text>
@@ -264,20 +396,76 @@ export default function AdminDashboard() {
             bordered={false}
             className="shadow-sm"
             extra={
-              <Text type="secondary">
-                {displayRows.length} record{displayRows.length === 1 ? '' : 's'}
-              </Text>
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                onClick={() => load(dayKey)}
+                loading={loading}
+              >
+                Refresh
+              </Button>
             }
           >
-            <Table
-              rowKey="id"
-              columns={columns}
-              dataSource={displayRows}
-              loading={loading}
-              pagination={{ pageSize: 8, showSizeChanger: false }}
-              scroll={{ x: 'max-content' }}
-              locale={{ emptyText: 'No one has clocked in today yet' }}
-            />
+            {/* Filter chips */}
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 6,
+                marginBottom: 12,
+                paddingBottom: 12,
+                borderBottom: '1px solid #f1f5f9',
+              }}
+            >
+              {FEED_FILTERS.map((opt) => {
+                const active = feedFilter === opt.key;
+                let count = 0;
+                if (opt.key === 'all') count = activity.length;
+                else if (opt.key === 'clock')
+                  count = activity.filter((e) => e.kind === 'clock-in' || e.kind === 'clock-out').length;
+                else if (opt.key === 'early')
+                  count = activity.filter((e) => e.kind.startsWith('early')).length;
+                else if (opt.key === 'registration')
+                  count = activity.filter((e) => e.kind === 'registration').length;
+
+                return (
+                  <Button
+                    key={opt.key}
+                    size="small"
+                    type={active ? 'primary' : 'default'}
+                    onClick={() => setFeedFilter(opt.key)}
+                    style={{
+                      borderRadius: 16,
+                      fontSize: 12,
+                      paddingInline: 14,
+                      fontWeight: active ? 600 : 500,
+                    }}
+                  >
+                    {opt.label} {count > 0 && <Text style={{ opacity: 0.7, marginLeft: 4 }}>{count}</Text>}
+                  </Button>
+                );
+              })}
+            </div>
+
+            {/* Feed body */}
+            {filteredActivity.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={
+                    loading
+                      ? 'Loading activity…'
+                      : feedFilter === 'all'
+                      ? 'No activity yet today'
+                      : `No ${feedFilter} activity today`
+                  }
+                />
+              </div>
+            ) : (
+              <div style={{ maxHeight: 560, overflowY: 'auto', paddingRight: 4 }}>
+                {filteredActivity.map(renderActivityItem)}
+              </div>
+            )}
           </Card>
         </Col>
 
@@ -376,6 +564,20 @@ export default function AdminDashboard() {
                 </Descriptions.Item>
                 <Descriptions.Item label="Late After">
                   {settings.late_threshold_minutes} min
+                </Descriptions.Item>
+                <Descriptions.Item label="Network check">
+                  {Number(settings.enforce_network) ? (
+                    <Tag color="green">On</Tag>
+                  ) : (
+                    <Tag>Off</Tag>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="GPS check">
+                  {Number(settings.enforce_location) ? (
+                    <Tag color="green">On</Tag>
+                  ) : (
+                    <Tag>Off</Tag>
+                  )}
                 </Descriptions.Item>
               </Descriptions>
             ) : (

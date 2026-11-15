@@ -1,15 +1,19 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Card, Table, Tag, Button, Typography, Space, DatePicker, Select, Input,
-  Row, Col, Statistic, message, Grid, Empty, Badge, Tooltip,
+  Row, Col, Statistic, message, Grid, Empty, Badge, Tooltip, Image,
+  Modal, Descriptions, Divider,
 } from 'antd';
 import {
   FileExcelOutlined, ReloadOutlined, SearchOutlined, FilterOutlined,
   CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, TeamOutlined,
+  EyeOutlined, EnvironmentOutlined, CameraOutlined, FileTextOutlined,
+  HomeOutlined, WifiOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import api from '../api/axios';
+import { API_ORIGIN } from '../config';
 
 dayjs.extend(isoWeek);
 
@@ -26,7 +30,14 @@ const statusColor = {
   early: 'orange',
 };
 
-// Combined Status options — includes real statuses + early-out pseudo-statuses
+const STATUS_META = {
+  present: { accent: '#16a34a', bg: '#ecfdf5', label: 'Present' },
+  late: { accent: '#d97706', bg: '#fffbeb', label: 'Late' },
+  absent: { accent: '#dc2626', bg: '#fef2f2', label: 'Absent' },
+  'half-day': { accent: '#1677ff', bg: '#eff6ff', label: 'Half Day' },
+  leave: { accent: '#7c3aed', bg: '#f5f3ff', label: 'Leave' },
+};
+
 const statusOptions = [
   { value: 'present', label: 'Present' },
   { value: 'late', label: 'Late' },
@@ -52,6 +63,9 @@ export default function Reports() {
   const [departmentFilter, setDepartmentFilter] = useState([]);
   const [genderFilter, setGenderFilter] = useState([]);
   const [quickRange, setQuickRange] = useState('today');
+
+  // Detail modal
+  const [viewing, setViewing] = useState(null);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -151,11 +165,9 @@ export default function Reports() {
     });
   }, [rows, empMeta]);
 
-  // Apply all filters — Status filter now also honours 'early' and 'on-time'
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
 
-    // Split status filter into real statuses vs. early pseudo-statuses
     const realStatuses = statusFilter.filter(
       (v) => v !== 'early' && v !== 'on-time'
     );
@@ -171,10 +183,8 @@ export default function Reports() {
         if (!hay.includes(q)) return false;
       }
 
-      // Real status filter (present/late/etc.)
       if (realStatuses.length && !realStatuses.includes(r.status)) return false;
 
-      // Early pseudo-status logic
       if (wantsEarly || wantsOnTime) {
         const matchesEarly = wantsEarly && r.isEarly;
         const matchesOnTime = wantsOnTime && !r.isEarly;
@@ -219,22 +229,31 @@ export default function Reports() {
   const exportCSV = () => {
     const headers = [
       'Date', 'Code', 'Name', 'Gender', 'Department',
-      'In', 'Out', 'Status', 'Early Leave Reason',
+      'In', 'Out', 'Status', 'Early Leave Reason', 'Clock-in Mode',
+      'Remote Location', 'Clock-in Latitude', 'Clock-in Longitude',
+      'Remote Selfie', 'Tasks Completed',
     ];
+    const csvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
     const csv = [headers.join(',')]
       .concat(
         filteredRows.map((r) =>
           [
             String(r.attendance_date).slice(0, 10),
             r.employee_code,
-            `"${r.full_name}"`,
+            r.full_name,
             r.gender || '',
             r.department_name || '',
             r.clock_in || '',
             r.clock_out || '',
             r.status,
-            `"${(r.early_leave_reason || '').replace(/"/g, '""')}"`,
-          ].join(',')
+            r.early_leave_reason || '',
+            r.clock_in_mode || 'onsite',
+            r.remote_location || '',
+            r.clock_in_lat ?? '',
+            r.clock_in_lng ?? '',
+            r.remote_selfie ? API_ORIGIN + r.remote_selfie : '',
+            r.tasks_completed || '',
+          ].map(csvCell).join(',')
         )
       )
       .join('\n');
@@ -248,6 +267,7 @@ export default function Reports() {
     URL.revokeObjectURL(url);
   };
 
+  // ── 5 core columns + View ──
   const columns = [
     {
       title: 'Date',
@@ -269,30 +289,15 @@ export default function Reports() {
       ),
     },
     {
-      title: 'Gender',
-      dataIndex: 'gender',
-      key: 'gender',
-      render: (v) => (v ? <Tag>{v}</Tag> : '—'),
-    },
-    {
-      title: 'Department',
-      dataIndex: 'department_name',
-      key: 'department_name',
-      render: (v) => v || '—',
-    },
-    {
-      title: 'Clock In',
-      dataIndex: 'clock_in',
-      key: 'clock_in',
-      render: (v) => v || <Text type="secondary">—</Text>,
-    },
-    {
-      title: 'Clock Out',
-      dataIndex: 'clock_out',
-      key: 'clock_out',
-      render: (v, r) => (
-        <Space size={4}>
-          {v || <Text type="secondary">—</Text>}
+      title: 'In / Out',
+      key: 'times',
+      render: (_, r) => (
+        <Space size={4} wrap>
+          <Text strong style={{ color: '#16a34a' }}>{r.clock_in || '—'}</Text>
+          <Text type="secondary">→</Text>
+          <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>
+            {r.clock_out || '—'}
+          </Text>
           {r.isEarly && (
             <Tooltip title={r.early_leave_reason || 'Early out'}>
               <Tag color="orange" style={{ marginLeft: 4 }}>early</Tag>
@@ -302,47 +307,320 @@ export default function Reports() {
       ),
     },
     {
+      title: 'Mode',
+      dataIndex: 'clock_in_mode',
+      key: 'clock_in_mode',
+      render: (v) => (
+        <Tag color={v === 'remote' ? 'purple' : 'blue'}>
+          {v === 'remote' ? 'Remote' : 'On-site'}
+        </Tag>
+      ),
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
       render: (v) => <Tag color={statusColor[v] || 'default'}>{v}</Tag>,
     },
+    {
+      title: '',
+      key: 'actions',
+      width: 90,
+      align: 'right',
+      render: (_, r) => (
+        <Button
+          type="primary"
+          ghost
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => setViewing(r)}
+        >
+          View
+        </Button>
+      ),
+    },
   ];
 
-  const renderMobileCard = (row) => (
-    <Card key={row.id} size="small" className="shadow-sm mb-3">
-      <div className="flex justify-between items-start gap-2 mb-2">
-        <div>
-          <div className="font-medium">{row.full_name}</div>
-          <div className="text-xs text-gray-500">{row.employee_code}</div>
-        </div>
-        <Space size={4}>
-          <Tag color={statusColor[row.status] || 'default'}>{row.status}</Tag>
-          {row.isEarly && <Tag color="orange">early</Tag>}
-        </Space>
-      </div>
-      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-        <div className="text-sm">
-          <Text type="secondary">Date: </Text>{String(row.attendance_date).slice(0, 10)}
-        </div>
-        <div className="text-sm">
-          <Text type="secondary">Dept: </Text>{row.department_name || '—'}
-        </div>
-        <div className="text-sm">
-          <Text type="secondary">Gender: </Text>{row.gender || '—'}
-        </div>
-        <div className="text-sm">
-          <Text type="secondary">In / Out: </Text>
-          {row.clock_in || '—'} / {row.clock_out || '—'}
-        </div>
-        {row.isEarly && row.early_leave_reason && (
-          <div className="text-xs text-gray-600 mt-1">
-            <Text type="secondary">Early reason: </Text>{row.early_leave_reason}
+  // ── Mobile compact card ──
+  const renderMobileCard = (row) => {
+    const meta = STATUS_META[row.status] || { accent: '#94a3b8', bg: '#f8fafc', label: row.status };
+    const isRemote = row.clock_in_mode === 'remote';
+
+    return (
+      <div
+        key={row.id}
+        style={{
+          background: '#fff',
+          border: '1px solid #e2e8f0',
+          borderLeft: `4px solid ${meta.accent}`,
+          borderRadius: 12,
+          padding: '12px 14px',
+          marginBottom: 10,
+          width: '100%',
+          maxWidth: '100%',
+          boxSizing: 'border-box',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', lineHeight: 1.2 }}>
+              {row.full_name || '—'}
+            </div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+              {row.employee_code} · {String(row.attendance_date).slice(0, 10)}
+            </div>
           </div>
-        )}
-      </Space>
-    </Card>
-  );
+          <Tag
+            color={statusColor[row.status] || 'default'}
+            style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize', flexShrink: 0, fontWeight: 600, fontSize: 11 }}
+          >
+            {row.status}
+          </Tag>
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 8,
+            background: '#f8fafc',
+            borderRadius: 10,
+            padding: '10px 12px',
+            marginTop: 10,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600 }}>
+              Clock In
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#16a34a', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+              {row.clock_in || '—'}
+            </div>
+          </div>
+          <div style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: 10 }}>
+            <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600 }}>
+              Clock Out
+            </div>
+            <div
+              style={{
+                fontSize: 15, fontWeight: 700, marginTop: 2, fontVariantNumeric: 'tabular-nums',
+                color: row.clock_out ? '#d97706' : '#94a3b8',
+              }}
+            >
+              {row.clock_out || '—'}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          <Tag color={isRemote ? 'purple' : 'blue'} style={{ margin: 0 }}>
+            {isRemote ? 'Remote' : 'On-site'}
+          </Tag>
+          {row.department_name && (
+            <Tag style={{ margin: 0 }}>{row.department_name}</Tag>
+          )}
+          {row.isEarly && <Tag color="orange" style={{ margin: 0 }}>early</Tag>}
+        </div>
+
+        <Button
+          block
+          type="primary"
+          ghost
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => setViewing(row)}
+          style={{ marginTop: 10, borderRadius: 8 }}
+        >
+          View details
+        </Button>
+      </div>
+    );
+  };
+
+  // ── Detail modal — full record view ──
+  const renderDetailModal = () => {
+    if (!viewing) return null;
+    const r = viewing;
+    const meta = STATUS_META[r.status] || { label: r.status, accent: '#94a3b8' };
+    const isRemote = r.clock_in_mode === 'remote';
+    const hasCoord = r.clock_in_lat != null && r.clock_in_lng != null;
+
+    return (
+      <Modal
+        open={!!viewing}
+        onCancel={() => setViewing(null)}
+        footer={<Button onClick={() => setViewing(null)}>Close</Button>}
+        centered
+        width={isMobile ? 'calc(100vw - 24px)' : 640}
+        styles={{ body: { maxHeight: '75vh', overflowY: 'auto' } }}
+        title={
+          <Space>
+            <span>{r.full_name || 'Attendance record'}</span>
+            <Tag color={statusColor[r.status] || 'default'}>{meta.label}</Tag>
+          </Space>
+        }
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {/* Identity card */}
+          <Card
+            size="small"
+            bordered={false}
+            style={{
+              background: isRemote ? '#faf5ff' : '#eff6ff',
+              border: `1px solid ${isRemote ? '#e9d5ff' : '#bfdbfe'}`,
+              borderRadius: 12,
+            }}
+          >
+            <Space size={10} align="center">
+              {isRemote ? (
+                <HomeOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
+              ) : (
+                <WifiOutlined style={{ fontSize: 20, color: '#1677ff' }} />
+              )}
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
+                  {isRemote ? 'Remote work day' : 'On-site work day'}
+                </div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {r.employee_code} · {String(r.attendance_date).slice(0, 10)}
+                </Text>
+              </div>
+            </Space>
+          </Card>
+
+          {/* Core times */}
+          <Descriptions
+            column={2}
+            size="small"
+            bordered
+            labelStyle={{ width: 120, background: '#f8fafc', fontWeight: 600 }}
+          >
+            <Descriptions.Item label="Clock in">
+              <Text strong style={{ color: '#16a34a' }}>{r.clock_in || '—'}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Clock out">
+              <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>
+                {r.clock_out || '—'}
+              </Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Status">
+              <Tag color={statusColor[r.status] || 'default'}>{meta.label}</Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="Mode">
+              <Tag color={isRemote ? 'purple' : 'blue'}>
+                {isRemote ? 'Remote' : 'On-site'}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="Department" span={2}>
+              {r.department_name || <Text type="secondary">Not assigned</Text>}
+            </Descriptions.Item>
+            <Descriptions.Item label="Gender">
+              {r.gender ? <Tag>{r.gender}</Tag> : <Text type="secondary">—</Text>}
+            </Descriptions.Item>
+            <Descriptions.Item label="Employee code">
+              <Text code>{r.employee_code}</Text>
+            </Descriptions.Item>
+          </Descriptions>
+
+          {/* Remote-specific */}
+          {isRemote && (
+            <>
+              <Divider style={{ margin: '4px 0' }}>Remote activity</Divider>
+
+              <Descriptions
+                column={1}
+                size="small"
+                bordered
+                labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
+              >
+                <Descriptions.Item
+                  label={<><EnvironmentOutlined /> Location</>}
+                >
+                  {r.remote_location || <Text type="secondary">Not recorded</Text>}
+                </Descriptions.Item>
+                <Descriptions.Item label="GPS coordinates">
+                  {hasCoord ? (
+                    <Text code style={{ fontSize: 12 }}>
+                      {r.clock_in_lat}, {r.clock_in_lng}
+                    </Text>
+                  ) : (
+                    <Text type="secondary">Not captured</Text>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item
+                  label={<><CameraOutlined /> Selfie</>}
+                >
+                  {r.remote_selfie ? (
+                    <Image
+                      src={API_ORIGIN + r.remote_selfie}
+                      alt={`${r.full_name || 'Employee'} remote selfie`}
+                      width={160}
+                      style={{ borderRadius: 8, border: '1px solid #e2e8f0' }}
+                    />
+                  ) : (
+                    <Text type="secondary">Not uploaded</Text>
+                  )}
+                </Descriptions.Item>
+              </Descriptions>
+
+              <div>
+                <Space size={6} style={{ marginBottom: 8 }}>
+                  <FileTextOutlined style={{ color: '#065f46' }} />
+                  <Text strong>Tasks completed</Text>
+                </Space>
+                {r.tasks_completed ? (
+                  <div
+                    style={{
+                      background: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 10,
+                      padding: '12px 14px',
+                      fontSize: 13,
+                      lineHeight: 1.7,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      color: '#0f172a',
+                    }}
+                  >
+                    {r.tasks_completed}
+                  </div>
+                ) : (
+                  <Text type="secondary" style={{ fontSize: 13 }}>
+                    Not submitted yet.
+                  </Text>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Early leave */}
+          {r.early_leave_reason && (
+            <>
+              <Divider style={{ margin: '4px 0' }}>Early leave</Divider>
+              <div
+                style={{
+                  background: '#fffbeb',
+                  border: '1px solid #fde68a',
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  color: '#92400e',
+                  wordBreak: 'break-word',
+                }}
+              >
+                <strong>Reason:</strong> {r.early_leave_reason}
+              </div>
+            </>
+          )}
+
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            Record ID #{r.id} · Logged on {String(r.created_at || '').slice(0, 19).replace('T', ' ')}
+          </Text>
+        </Space>
+      </Modal>
+    );
+  };
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-6">
@@ -387,11 +665,7 @@ export default function Reports() {
           <Col xs={24} md={12}>
             <Space wrap>
               <Text strong>Range:</Text>
-              <RangePicker
-                value={range}
-                onChange={applyRange}
-                allowClear={false}
-              />
+              <RangePicker value={range} onChange={applyRange} allowClear={false} />
             </Space>
           </Col>
         </Row>
@@ -479,45 +753,26 @@ export default function Reports() {
         </Row>
       </Card>
 
-      {/* Stats — back to 4 cards */}
+      {/* Stats */}
       <Row gutter={[16, 16]} className="mb-4">
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Records"
-              value={stats.total}
-              prefix={<TeamOutlined style={{ color: '#1677ff' }} />}
-            />
+            <Statistic title="Records" value={stats.total} prefix={<TeamOutlined style={{ color: '#1677ff' }} />} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Present"
-              value={stats.present}
-              prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />}
-              valueStyle={{ color: '#16a34a' }}
-            />
+            <Statistic title="Present" value={stats.present} prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Late"
-              value={stats.late}
-              prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />}
-              valueStyle={{ color: '#d97706' }}
-            />
+            <Statistic title="Late" value={stats.late} prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />} valueStyle={{ color: '#d97706' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bordered={false} className="shadow-sm">
-            <Statistic
-              title="Absent"
-              value={stats.absent}
-              prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />}
-              valueStyle={{ color: '#dc2626' }}
-            />
+            <Statistic title="Absent" value={stats.absent} prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />} valueStyle={{ color: '#dc2626' }} />
           </Card>
         </Col>
       </Row>
@@ -551,6 +806,8 @@ export default function Reports() {
           />
         )}
       </Card>
+
+      {renderDetailModal()}
     </div>
   );
 }
