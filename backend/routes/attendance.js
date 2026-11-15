@@ -1,6 +1,8 @@
 const express = require('express');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
+const upload = require('../middleware/upload');
+const fs = require('fs');
 const router = express.Router();
 
 // ============ HELPERS ============
@@ -37,15 +39,26 @@ function getClientIp(req) {
   return ip;
 }
 
-// ============ CLOCK IN (strict: public IP AND GPS both required) ============
-router.post('/clock-in', verifyToken, async (req, res) => {
+// ============ CLOCK IN (on-site IP+GPS, or remote selfie+GPS) ============
+router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) => {
   const today = localDateString();
+  let selfieSaved = false;
+  const removeUploadedSelfie = async () => {
+    if (!req.file || selfieSaved) return;
+    try {
+      await fs.promises.unlink(req.file.path);
+    } catch (err) {
+      if (err.code !== 'ENOENT') console.error('[attendance] selfie cleanup failed:', err.message);
+    }
+  };
+
   try {
     const [existing] = await pool.query(
       'SELECT * FROM attendance WHERE employee_id=? AND attendance_date=?',
       [req.user.id, today]
     );
     if (existing.length) {
+      await removeUploadedSelfie();
       return res.status(400).json({ message: 'Already clocked in today' });
     }
 
@@ -53,18 +66,71 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     const settings = settingsRows[0] || {};
     const now = new Date();
 
-    // ---------- LOCATION CHECK (IP AND GPS) ----------
+    const mode = req.body?.mode || 'onsite';
+    if (!['onsite', 'remote'].includes(mode)) {
+      await removeUploadedSelfie();
+      return res.status(400).json({ message: 'Clock-in mode must be onsite or remote' });
+    }
+    if (mode === 'onsite') await removeUploadedSelfie();
+
     const enforce = !!Number(settings.enforce_location);
     const reqIp = getClientIp(req); // backend-observed IP (LAN/loopback on same machine)
     const clientPublicIp = req.body?.publicIp ? String(req.body.publicIp).trim() : null; // from ipify in browser
-    const bodyLat = req.body?.lat != null ? Number(req.body.lat) : null;
-    const bodyLng = req.body?.lng != null ? Number(req.body.lng) : null;
+    const bodyLat = req.body?.lat != null && req.body.lat !== '' ? Number(req.body.lat) : null;
+    const bodyLng = req.body?.lng != null && req.body.lng !== '' ? Number(req.body.lng) : null;
 
-    let method = 'manual';
+    let method = mode === 'remote' ? 'remote' : 'manual';
     let verified = 0;
     let distance = null;
+    let remoteLocation = null;
+    let remoteSelfie = null;
 
-    if (enforce) {
+    if (mode === 'remote') {
+      const location = String(req.body?.remote_location || '').trim();
+      if (!location || location.length > 255) {
+        await removeUploadedSelfie();
+        return res.status(400).json({
+          message: 'Enter the remote work location (maximum 255 characters)',
+        });
+      }
+      if (!req.file) {
+        return res.status(400).json({ message: 'A selfie at your work location is required' });
+      }
+      if (
+        bodyLat == null ||
+        bodyLng == null ||
+        !Number.isFinite(bodyLat) ||
+        !Number.isFinite(bodyLng) ||
+        bodyLat < -90 || bodyLat > 90 ||
+        bodyLng < -180 || bodyLng > 180
+      ) {
+        await removeUploadedSelfie();
+        return res.status(400).json({
+          message: 'Allow location access to record your remote work location',
+          requiresLocation: true,
+        });
+      }
+
+      const [h, m] = String(settings.work_start || '08:00:00').split(':');
+      const [endHour, endMinute] = String(settings.work_end || '17:00:00').split(':');
+      const workStart = new Date();
+      workStart.setHours(+h, +m, 0, 0);
+      const workEnd = new Date();
+      workEnd.setHours(+endHour, +endMinute, 0, 0);
+      if (now < workStart || now > workEnd) {
+        await removeUploadedSelfie();
+        return res.status(403).json({
+          message: `Remote clock-in is available between ${String(settings.work_start || '08:00:00').slice(0, 5)} and ${String(settings.work_end || '17:00:00').slice(0, 5)}.`,
+          outsideWorkHours: true,
+        });
+      }
+
+      remoteLocation = location;
+      remoteSelfie = '/uploads/' + req.file.filename;
+      method = 'remote';
+      verified = 1;
+    } else if (enforce) {
+      // ---------- ON-SITE LOCATION CHECK (IP AND GPS) ----------
       const allowedIps = (settings.allowed_ips || '')
         .split(',')
         .map((x) => x.trim())
@@ -74,6 +140,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       // Prefer the browser-reported public IP; fall back to req.ip for direct connections.
       const effectiveIp = clientPublicIp || reqIp;
       if (!effectiveIp || allowedIps.length === 0 || !allowedIps.includes(effectiveIp)) {
+        await removeUploadedSelfie();
         return res.status(403).json({
           message: 'You must be connected to the office Wi-Fi to clock in.',
           requiresOfficeWifi: true,
@@ -88,6 +155,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
         settings.office_lat == null ||
         settings.office_lng == null
       ) {
+        await removeUploadedSelfie();
         return res.status(403).json({
           message: 'Location required. Enable GPS on your device to clock in.',
           requiresLocation: true,
@@ -102,6 +170,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       );
       const radius = Number(settings.geofence_radius_m || 200);
       if (distance > radius) {
+        await removeUploadedSelfie();
         return res.status(403).json({
           message: `You are ${Math.round(distance)}m from the office. Must be within ${radius}m to clock in.`,
           distance: Math.round(distance),
@@ -129,8 +198,9 @@ router.post('/clock-in', verifyToken, async (req, res) => {
     await pool.query(
       `INSERT INTO attendance
         (employee_id, attendance_date, clock_in, status,
-         clock_in_lat, clock_in_lng, clock_in_ip, clock_in_method, clock_in_verified)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         clock_in_lat, clock_in_lng, clock_in_ip, clock_in_method, clock_in_verified,
+         clock_in_mode, remote_location, remote_selfie)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user.id,
         today,
@@ -141,8 +211,12 @@ router.post('/clock-in', verifyToken, async (req, res) => {
         clientPublicIp || reqIp, // store the public IP that was actually validated
         method,
         verified,
+        mode,
+        remoteLocation,
+        remoteSelfie,
       ]
     );
+    selfieSaved = true;
 
     res.json({
       message: 'Clocked in',
@@ -152,6 +226,7 @@ router.post('/clock-in', verifyToken, async (req, res) => {
       distance: distance != null ? Math.round(distance) : null,
     });
   } catch (err) {
+    await removeUploadedSelfie();
     res.status(500).json({ message: err.message });
   }
 });
@@ -166,6 +241,17 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     );
     if (!rows.length) return res.status(400).json({ message: 'You have not clocked in today' });
     if (rows[0].clock_out) return res.status(400).json({ message: 'Already clocked out' });
+
+    const tasksCompleted = String(req.body?.tasks_completed || '').trim();
+    if (rows[0].clock_in_mode === 'remote' && !tasksCompleted) {
+      return res.status(400).json({
+        message: 'Please enter the tasks you completed before clocking out',
+        requiresTasks: true,
+      });
+    }
+    if (tasksCompleted.length > 5000) {
+      return res.status(400).json({ message: 'Tasks completed must be 5000 characters or fewer' });
+    }
 
     const [settings] = await pool.query('SELECT * FROM settings WHERE id=1');
     const now = new Date();
@@ -193,8 +279,8 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     }
 
     await pool.query(
-      'UPDATE attendance SET clock_out=?, early_leave_reason=? WHERE id=?',
-      [localTimeString(now), reason, rows[0].id]
+      'UPDATE attendance SET clock_out=?, early_leave_reason=?, tasks_completed=? WHERE id=?',
+      [localTimeString(now), reason, rows[0].clock_in_mode === 'remote' ? tasksCompleted : null, rows[0].id]
     );
     res.json({ message: 'Clocked out' });
   } catch (err) {

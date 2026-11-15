@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const bcrypt = require('bcryptjs');
 const mysql = require('mysql2/promise');
 
@@ -25,8 +25,6 @@ async function main() {
   const started = Date.now();
   console.log('[seed] connecting to', process.env.DB_HOST, 'port', process.env.DB_PORT || 3306);
 
-  // Aiven: connect directly to the existing database with SSL.
-  // Skip CREATE DATABASE (avnadmin can't create DBs on free tier).
   const db = await mysql.createConnection({
     host: process.env.DB_HOST,
     port: Number(process.env.DB_PORT) || 3306,
@@ -36,94 +34,28 @@ async function main() {
     ssl: { rejectUnauthorized: false },
   });
 
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS departments (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      name VARCHAR(100) UNIQUE NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS roles (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      department_id INT NOT NULL,
-      name VARCHAR(100) NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE,
-      UNIQUE KEY unique_role_per_dept (department_id, name)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS employees (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      employee_code VARCHAR(50) UNIQUE NOT NULL,
-      full_name VARCHAR(100) NOT NULL,
-      email VARCHAR(100) UNIQUE NOT NULL,
-      password_hash VARCHAR(255) NOT NULL,
-      phone VARCHAR(20),
-      gender ENUM('male','female','other') NULL,
-      profile_picture VARCHAR(255) NULL,
-      department_id INT NULL,
-      role_id INT NULL,
-      system_role ENUM('admin','employee') DEFAULT 'employee',
-      is_active BOOLEAN DEFAULT TRUE,
-      is_approved BOOLEAN DEFAULT FALSE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL,
-      FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE SET NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
-
-  // Migration: add is_approved column if an older DB is missing it
-  const [cols] = await db.query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'is_approved'`,
+  // Verify migrations have been applied. If not, abort.
+  const [tables] = await db.query(
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN
+       ('departments','roles','employees','attendance','settings','early_leave_requests')`,
     [process.env.DB_NAME]
   );
-  if (cols.length === 0) {
-    console.log('[seed] migrating: adding is_approved column');
-    await db.query(
-      'ALTER TABLE employees ADD COLUMN is_approved BOOLEAN DEFAULT FALSE AFTER is_active'
-    );
-    await db.query('UPDATE employees SET is_approved = TRUE');
+  if (tables.length < 6) {
+    console.error('[seed] Required tables missing. Run "npm run db:migrate" first.');
+    await db.end();
+    process.exit(1);
   }
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS attendance (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      employee_id INT NOT NULL,
-      attendance_date DATE NOT NULL,
-      clock_in TIME,
-      clock_out TIME,
-      status ENUM('present','late','absent','half-day','leave') DEFAULT 'present',
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
-      UNIQUE KEY unique_attendance (employee_id, attendance_date)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS settings (
-      id INT PRIMARY KEY DEFAULT 1,
-      work_start TIME DEFAULT '08:00:00',
-      work_end TIME DEFAULT '17:00:00',
-      late_threshold_minutes INT DEFAULT 15,
-      company_name VARCHAR(100) DEFAULT 'ASK Agrobusiness Limited'
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
-
-  await db.query('INSERT IGNORE INTO settings (id) VALUES (1);');
-  console.log('[seed] tables ensured');
+  console.log('[seed] all required tables present');
 
   await db.beginTransaction();
   try {
+    // --- Departments ---
     for (const name of Object.keys(DEPARTMENTS)) {
       await db.query('INSERT IGNORE INTO departments (name) VALUES (?)', [name]);
     }
 
+    // --- Roles ---
     const [deptRows] = await db.query('SELECT id, name FROM departments');
     const deptMap = Object.fromEntries(deptRows.map((d) => [d.name, d.id]));
 
@@ -139,6 +71,7 @@ async function main() {
     }
     console.log('[seed] departments + roles ensured');
 
+    // --- Admin user ---
     const [existing] = await db.query(
       'SELECT id, is_approved FROM employees WHERE email = ?',
       [process.env.SEED_ADMIN_EMAIL]
