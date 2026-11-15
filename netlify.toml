@@ -3,6 +3,9 @@
   command = "rm -rf node_modules package-lock.json && npm install && npm run build"
   publish = "dist"
 
+[build.environment]
+  NODE_VERSION = "20"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
