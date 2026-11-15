@@ -7,3 +7,5 @@ uploads/*
 frontend/package-lock.json 
 frontend/package-lock.json 
 backend/package-lock.json 
+*.zip 
+frontend/dist.zip 
