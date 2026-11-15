@@ -1,13 +1,7 @@
 import axios from 'axios';
+import { API_BASE } from '../config';
 
-const hostname = window.location.hostname;
-
-const baseURL =
-  hostname === 'localhost' || hostname === '127.0.0.1'
-    ? 'http://localhost:5000/api'
-    : `http://${hostname}:5000/api`;
-
-const api = axios.create({ baseURL });
+const api = axios.create({ baseURL: API_BASE });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
