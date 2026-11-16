@@ -15,6 +15,7 @@ export default function AdminSidebar({ open, onClose }) {
       </p>
       <NavLink to="/admin" className={linkClass} end>Admin Dashboard</NavLink>
       <NavLink to="/employees" className={linkClass}>Employees</NavLink>
+      <NavLink to="/services" className={linkClass}>Services</NavLink>
       <NavLink to="/guests" className={linkClass}>Guests / Visitors</NavLink>
 
       <p className="px-4 pt-4 pb-2 text-xs uppercase tracking-wider text-green-400">

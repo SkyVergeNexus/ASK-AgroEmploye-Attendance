@@ -20,12 +20,12 @@ import {
   LogoutOutlined,
   CheckOutlined,
   CloseOutlined,
+  SolutionOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 
 const { Title, Text } = Typography;
 
-// Use LOCAL date (not UTC) so today's key matches the server's date
 const getTodayKey = () => {
   const d = new Date();
   const y = d.getFullYear();
@@ -34,13 +34,16 @@ const getTodayKey = () => {
   return `${y}-${m}-${day}`;
 };
 
-// Activity event filter chips
 const FEED_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'clock', label: 'Clock' },
   { key: 'early', label: 'Early leaves' },
   { key: 'registration', label: 'Registrations' },
+  { key: 'guest', label: 'Guests' },
 ];
+
+// ⭐ Recent Activities shows only the latest 5 events
+const RECENT_ACTIVITY_LIMIT = 5;
 
 export default function AdminDashboard() {
   const [dayKey, setDayKey] = useState(getTodayKey());
@@ -49,6 +52,7 @@ export default function AdminDashboard() {
   });
   const [earlyRequests, setEarlyRequests] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [guestStats, setGuestStats] = useState({ total: 0, today: 0, week: 0 });
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -57,19 +61,22 @@ export default function AdminDashboard() {
   const load = useCallback(async (dateKey) => {
     setLoading(true);
     try {
-      const [statsRes, settingsRes, earlyRes, activityRes] = await Promise.all([
-        api.get('/attendance/stats'),
-        api.get('/settings'),
-        api.get('/attendance/early-leave/all', { params: { status: 'pending' } }),
-        api.get('/attendance/activity-feed', {
-          params: { from: dateKey, to: dateKey, limit: 150 },
-        }),
-      ]);
+      const [statsRes, settingsRes, earlyRes, activityRes, guestStatsRes] =
+        await Promise.all([
+          api.get('/attendance/stats'),
+          api.get('/settings'),
+          api.get('/attendance/early-leave/all', { params: { status: 'pending' } }),
+          api.get('/attendance/activity-feed', {
+            params: { from: dateKey, to: dateKey, limit: 150 },
+          }),
+          api.get('/guests/stats'),
+        ]);
 
       setStats(statsRes.data);
       setSettings(settingsRes.data);
       setEarlyRequests(earlyRes.data || []);
       setActivity(activityRes.data || []);
+      setGuestStats(guestStatsRes.data || { total: 0, today: 0, week: 0 });
       setLastUpdated(new Date());
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load dashboard');
@@ -78,7 +85,6 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  // Watch for date rollover every 30s
   useEffect(() => {
     const tick = () => {
       const current = getTodayKey();
@@ -92,31 +98,32 @@ export default function AdminDashboard() {
     return () => clearInterval(interval);
   }, [dayKey]);
 
-  // Load whenever dayKey changes + poll every 30s
   useEffect(() => {
     load(dayKey);
     const timer = setInterval(() => load(dayKey), 30000);
     return () => clearInterval(timer);
   }, [dayKey, load]);
 
-  // Filtered feed based on chip selection
-  const filteredActivity = useMemo(() => {
-    if (feedFilter === 'all') return activity;
+  // Filter by chip, then cap at RECENT_ACTIVITY_LIMIT
+  const recentActivity = useMemo(() => {
+    let filtered = activity;
     if (feedFilter === 'clock') {
-      return activity.filter((e) => e.kind === 'clock-in' || e.kind === 'clock-out');
+      filtered = activity.filter(
+        (e) => e.kind === 'clock-in' || e.kind === 'clock-out'
+      );
+    } else if (feedFilter === 'early') {
+      filtered = activity.filter((e) => e.kind.startsWith('early'));
+    } else if (feedFilter === 'registration') {
+      filtered = activity.filter((e) => e.kind === 'registration');
+    } else if (feedFilter === 'guest') {
+      filtered = activity.filter((e) => e.kind === 'guest-checkin');
     }
-    if (feedFilter === 'early') {
-      return activity.filter((e) => e.kind.startsWith('early'));
-    }
-    if (feedFilter === 'registration') {
-      return activity.filter((e) => e.kind === 'registration');
-    }
-    return activity;
+    return filtered.slice(0, RECENT_ACTIVITY_LIMIT);
   }, [activity, feedFilter]);
 
   const pendingCount = earlyRequests.length;
+  const guestTodayCount = guestStats.today;
 
-  // ── Render a single activity item ──────────────────────────
   const renderActivityItem = (ev) => {
     const time = ev.at
       ? new Date(ev.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -142,14 +149,14 @@ export default function AdminDashboard() {
           return <div style={{ ...baseStyle, background: '#fef2f2', color: '#dc2626' }}><CloseOutlined /></div>;
         case 'registration':
           return <div style={{ ...baseStyle, background: '#eff6ff', color: '#1677ff' }}><UserAddOutlined /></div>;
+        case 'guest-checkin':
+          return <div style={{ ...baseStyle, background: '#f5f3ff', color: '#7c3aed' }}><SolutionOutlined /></div>;
         default:
           return <div style={{ ...baseStyle, background: '#f8fafc', color: '#64748b' }}><ReloadOutlined /></div>;
       }
     };
 
-    const name = ev.employee?.full_name || 'Unknown';
-    const code = ev.employee?.employee_code;
-    const dept = ev.employee?.department;
+    const name = ev.employee?.full_name || ev.meta?.full_name || 'Unknown';
 
     const renderBody = () => {
       switch (ev.kind) {
@@ -166,7 +173,9 @@ export default function AdminDashboard() {
                 )}
               </div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                {ev.meta?.time}{code ? ` · ${code}` : ''}{dept ? ` · ${dept}` : ''}
+                {ev.meta?.time}
+                {ev.employee?.employee_code ? ` · ${ev.employee.employee_code}` : ''}
+                {ev.employee?.department ? ` · ${ev.employee.department}` : ''}
               </div>
             </>
           );
@@ -181,7 +190,8 @@ export default function AdminDashboard() {
                 )}
               </div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                {ev.meta?.time}{code ? ` · ${code}` : ''}
+                {ev.meta?.time}
+                {ev.employee?.employee_code ? ` · ${ev.employee.employee_code}` : ''}
               </div>
               {ev.meta?.early_reason && (
                 <div style={{ fontSize: 11, color: '#92400e', marginTop: 3, fontStyle: 'italic' }}>
@@ -198,7 +208,8 @@ export default function AdminDashboard() {
                 <strong>{name}</strong> requested early leave
               </div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                Wants out at <strong>{ev.meta?.requested_out_time}</strong>{code ? ` · ${code}` : ''}
+                Wants out at <strong>{ev.meta?.requested_out_time}</strong>
+                {ev.employee?.employee_code ? ` · ${ev.employee.employee_code}` : ''}
               </div>
               {ev.meta?.reason && (
                 <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, fontStyle: 'italic' }}>
@@ -247,11 +258,30 @@ export default function AdminDashboard() {
                 )}
               </div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                {code}{dept ? ` · ${dept}` : ''}
+                {ev.employee?.employee_code}
+                {ev.employee?.department ? ` · ${ev.employee.department}` : ''}
               </div>
               {ev.meta?.email && (
                 <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
                   {ev.meta.email}
+                </div>
+              )}
+            </>
+          );
+
+        case 'guest-checkin':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong> checked in as a guest
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                {ev.meta?.service_name || 'No service'}
+                {ev.meta?.phone ? ` · ${ev.meta.phone}` : ''}
+              </div>
+              {ev.meta?.purpose && ev.meta?.service_name === 'Other' && (
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, fontStyle: 'italic' }}>
+                  "{ev.meta.purpose}"
                 </div>
               )}
             </>
@@ -305,7 +335,6 @@ export default function AdminDashboard() {
         </Space>
       </div>
 
-      {/* Pending early-leave alert */}
       {pendingCount > 0 && (
         <Alert
           type="warning"
@@ -328,46 +357,62 @@ export default function AdminDashboard() {
         />
       )}
 
-      {/* Stat cards */}
+      {/* ═══════════════ STAT CARDS ═══════════════
+          Cleaner layout: 4 equal cards on desktop,
+          2×2 on tablet, stacked on phone.
+          Guest count is folded into the "Present Today" card's subtitle. */}
       <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={24} sm={12} lg={6}>
-          <Card bordered={false} className="shadow-sm">
+        <Col xs={12} md={6}>
+          <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
             <Statistic
-              title="Total Employees"
+              title="Employees"
               value={stats.total}
               prefix={<TeamOutlined style={{ color: '#1677ff' }} />}
             />
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
+              Total active staff
+            </Text>
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card bordered={false} className="shadow-sm">
+
+        <Col xs={12} md={6}>
+          <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
             <Statistic
               title="Present Today"
               value={stats.present}
               prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />}
               valueStyle={{ color: '#16a34a' }}
             />
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
+              of {stats.total} employees
+            </Text>
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card bordered={false} className="shadow-sm">
+
+        <Col xs={12} md={6}>
+          <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
             <Statistic
               title="Late Today"
               value={stats.late}
               prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />}
               valueStyle={{ color: '#d97706' }}
             />
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
+              Clocked in after threshold
+            </Text>
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+
+        <Col xs={12} md={6}>
           <Card
             bordered={false}
             className="shadow-sm"
-            style={
-              pendingCount > 0
+            style={{
+              height: '100%',
+              ...(pendingCount > 0
                 ? { border: '1px solid #f59e0b', background: '#fffbeb' }
-                : undefined
-            }
+                : {}),
+            }}
           >
             <Statistic
               title="Pending Early-Outs"
@@ -375,19 +420,23 @@ export default function AdminDashboard() {
               prefix={<WarningOutlined style={{ color: '#d97706' }} />}
               valueStyle={{ color: pendingCount > 0 ? '#d97706' : '#94a3b8' }}
             />
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
+              {guestTodayCount} guest{guestTodayCount === 1 ? '' : 's'} today
+            </Text>
           </Card>
         </Col>
       </Row>
 
-      {/* Main content */}
       <Row gutter={[16, 16]}>
+        {/* ═══════════════ RECENT ACTIVITIES ═══════════════
+            Latest 5 events, filterable by type.
+            Guests appear here alongside employee actions. */}
         <Col xs={24} lg={16}>
-          {/* ═══════════════ LIVE ACTIVITY FEED ═══════════════ */}
           <Card
             title={
               <Space wrap>
-                <span>Today's Activity</span>
-                <Badge count={activity.length} showZero color="#065f46" />
+                <span>Recent Activities</span>
+                <Badge count={recentActivity.length} showZero color="#065f46" />
                 <Text type="secondary" style={{ fontWeight: 'normal', fontSize: 12 }}>
                   {dayKey}
                 </Text>
@@ -406,7 +455,6 @@ export default function AdminDashboard() {
               </Button>
             }
           >
-            {/* Filter chips */}
             <div
               style={{
                 display: 'flex',
@@ -427,6 +475,8 @@ export default function AdminDashboard() {
                   count = activity.filter((e) => e.kind.startsWith('early')).length;
                 else if (opt.key === 'registration')
                   count = activity.filter((e) => e.kind === 'registration').length;
+                else if (opt.key === 'guest')
+                  count = activity.filter((e) => e.kind === 'guest-checkin').length;
 
                 return (
                   <Button
@@ -441,14 +491,16 @@ export default function AdminDashboard() {
                       fontWeight: active ? 600 : 500,
                     }}
                   >
-                    {opt.label} {count > 0 && <Text style={{ opacity: 0.7, marginLeft: 4 }}>{count}</Text>}
+                    {opt.label}{' '}
+                    {count > 0 && (
+                      <Text style={{ opacity: 0.7, marginLeft: 4 }}>{count}</Text>
+                    )}
                   </Button>
                 );
               })}
             </div>
 
-            {/* Feed body */}
-            {filteredActivity.length === 0 ? (
+            {recentActivity.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 16px' }}>
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -462,8 +514,15 @@ export default function AdminDashboard() {
                 />
               </div>
             ) : (
-              <div style={{ maxHeight: 560, overflowY: 'auto', paddingRight: 4 }}>
-                {filteredActivity.map(renderActivityItem)}
+              <div>
+                {recentActivity.map(renderActivityItem)}
+                {activity.length > RECENT_ACTIVITY_LIMIT && (
+                  <div style={{ textAlign: 'center', marginTop: 12 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      Showing latest {RECENT_ACTIVITY_LIMIT} of {activity.length} events
+                    </Text>
+                  </div>
+                )}
               </div>
             )}
           </Card>
@@ -566,25 +625,14 @@ export default function AdminDashboard() {
                   {settings.late_threshold_minutes} min
                 </Descriptions.Item>
                 <Descriptions.Item label="Network check">
-                  {Number(settings.enforce_network) ? (
-                    <Tag color="green">On</Tag>
-                  ) : (
-                    <Tag>Off</Tag>
-                  )}
+                  {Number(settings.enforce_network) ? <Tag color="green">On</Tag> : <Tag>Off</Tag>}
                 </Descriptions.Item>
                 <Descriptions.Item label="GPS check">
-                  {Number(settings.enforce_location) ? (
-                    <Tag color="green">On</Tag>
-                  ) : (
-                    <Tag>Off</Tag>
-                  )}
+                  {Number(settings.enforce_location) ? <Tag color="green">On</Tag> : <Tag>Off</Tag>}
                 </Descriptions.Item>
               </Descriptions>
             ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="No settings"
-              />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No settings" />
             )}
             <Divider style={{ margin: '12px 0' }} />
             <Link to="/settings">
@@ -594,6 +642,7 @@ export default function AdminDashboard() {
             </Link>
           </Card>
 
+          {/* Quick Actions — Services Catalog & Guests / Visitors removed */}
           <Card title="Quick Actions" bordered={false} className="shadow-sm">
             <Space direction="vertical" style={{ width: '100%' }} size="small">
               <Link to="/employees">
@@ -602,11 +651,7 @@ export default function AdminDashboard() {
                 </Button>
               </Link>
               <Link to="/early-leave">
-                <Button
-                  block
-                  icon={<WarningOutlined />}
-                  danger={pendingCount > 0}
-                >
+                <Button block icon={<WarningOutlined />} danger={pendingCount > 0}>
                   Early-Out Requests
                   {pendingCount > 0 && (
                     <Badge count={pendingCount} style={{ marginLeft: 6 }} />

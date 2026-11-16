@@ -133,55 +133,26 @@ function buildTimestamp(dateVal, timeVal) {
 // ============================================================
 //  SELFIE VALIDATION
 // ============================================================
-//
-// HARDENING #1: Validate that uploaded selfies are real images of
-// reasonable size and are fresh captures — not 5-year-old gallery picks
-// from the wrong phone.
 
-const SELFIE_MIN_BYTES = 10 * 1024;          // 10 KB floor (rejects blank/icon files)
-const SELFIE_MAX_BYTES = 5 * 1024 * 1024;    // 5 MB ceiling (matches multer config)
-const SELFIE_MAX_AGE_MS = 15 * 60 * 1000;    // 15 minutes — prevents stale gallery reuse
+const SELFIE_MIN_BYTES = 10 * 1024;
+const SELFIE_MAX_BYTES = 5 * 1024 * 1024;
+const SELFIE_MAX_AGE_MS = 15 * 60 * 1000;
 const SELFIE_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
 
-// Detect JPEG / PNG / WEBP from magic bytes (first few bytes of the file).
-// Trusts the file content, not the extension — clients can lie about MIME.
 function detectImageType(buf) {
   if (!buf || buf.length < 12) return null;
-
-  // JPEG: FF D8 FF
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
-
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
   if (
-    buf[0] === 0x89 &&
-    buf[1] === 0x50 &&
-    buf[2] === 0x4e &&
-    buf[3] === 0x47 &&
-    buf[4] === 0x0d &&
-    buf[5] === 0x0a &&
-    buf[6] === 0x1a &&
-    buf[7] === 0x0a
-  )
-    return 'image/png';
-
-  // WEBP: "RIFF" ... "WEBP"
+    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
+    buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+  ) return 'image/png';
   if (
-    buf[0] === 0x52 &&
-    buf[1] === 0x49 &&
-    buf[2] === 0x46 &&
-    buf[3] === 0x46 &&
-    buf[8] === 0x57 &&
-    buf[9] === 0x45 &&
-    buf[10] === 0x42 &&
-    buf[11] === 0x50
-  )
-    return 'image/webp';
-
+    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+  ) return 'image/webp';
   return null;
 }
 
-// Validate the uploaded selfie file. Throws with a user-facing message
-// on failure. Returns the detected MIME on success.
 async function validateSelfieFile(file) {
   if (!file) {
     const err = new Error('A selfie is required');
@@ -198,8 +169,6 @@ async function validateSelfieFile(file) {
     err.code = 'SELFIE_TOO_LARGE';
     throw err;
   }
-
-  // Read the first 16 bytes to sniff the true image type
   const fd = await fs.promises.open(file.path, 'r');
   try {
     const buf = Buffer.alloc(16);
@@ -235,7 +204,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
   };
 
   try {
-    // ---- 1. Duplicate guard ----
     const [existing] = await pool.query(
       'SELECT id FROM attendance WHERE employee_id = ? AND attendance_date = ?',
       [req.user.id, today]
@@ -245,7 +213,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       return res.status(400).json({ message: 'Already clocked in today' });
     }
 
-    // ---- 2. Load settings ----
     const [settingsRows] = await pool.query('SELECT * FROM settings WHERE id = 1');
     const settings = settingsRows[0] || {};
     const now = new Date();
@@ -256,7 +223,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     const workEndStr = settings.work_end || '17:00:00';
     const lateThreshold = Number(settings.late_threshold_minutes ?? 15);
 
-    // ---- 3. Mode + payload extraction ----
     const mode = String(req.body?.mode || 'onsite').toLowerCase();
     if (!['onsite', 'remote'].includes(mode)) {
       await removeUploadedSelfie();
@@ -270,7 +236,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     const bodyLat = req.body?.lat != null && req.body.lat !== '' ? Number(req.body.lat) : null;
     const bodyLng = req.body?.lng != null && req.body.lng !== '' ? Number(req.body.lng) : null;
 
-    // ---- 4. Branch on mode ----
     let method = 'manual';
     let verified = 0;
     let distance = null;
@@ -278,7 +243,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     let remoteSelfie = null;
 
     if (mode === 'remote') {
-      // ---------- REMOTE ----------
       const location = String(req.body?.remote_location || '').trim();
       if (!location) {
         await removeUploadedSelfie();
@@ -289,7 +253,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
         return res.status(400).json({ message: 'Remote location must be 255 characters or fewer' });
       }
 
-      // HARDENING #1 applied: validate the actual file bytes
       try {
         await validateSelfieFile(req.file);
       } catch (err) {
@@ -323,8 +286,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       method = 'remote';
       verified = 1;
     } else if (enforceLoc || enforceNet) {
-      // ---------- ON-SITE ----------
-
       if (enforceNet) {
         if (!clientIp || !ipMatchesAllowList(clientIp, settings.allowed_ips)) {
           await removeUploadedSelfie();
@@ -369,12 +330,10 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       verified = 1;
     }
 
-    // ---- 5. Late vs present ----
     const workStart = todayAt(workStartStr, '08:00:00');
     const diffMin = (now - workStart) / 60000;
     const status = diffMin > lateThreshold ? 'late' : 'present';
 
-    // ---- 6. Insert ----
     await pool.query(
       `INSERT INTO attendance
         (employee_id, attendance_date, clock_in, status,
@@ -415,17 +374,6 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 
 // ============================================================
 //  CLOCK OUT
-// ============================================================
-//
-// Policy:
-//   - Remote workers: finish field job at any time → clock out immediately
-//     with a short tasks-completed summary. NO early-leave approval.
-//   - On-site workers: leaving before work_end requires an approved
-//     early-leave request.
-//
-// HARDENING #2: Atomic check-and-set prevents the double clock-out race
-// where two concurrent requests both pass `if (record.clock_out)` and
-// both try to update the row. Now only the first one wins.
 // ============================================================
 router.post('/clock-out', verifyToken, async (req, res) => {
   const today = localDateString();
@@ -484,8 +432,6 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       }
     }
 
-    // HARDENING #2: Atomic update — add `AND clock_out IS NULL` so a race
-    // loser gets 0 affected rows instead of silently overwriting the winner.
     const [result] = await pool.query(
       `UPDATE attendance
        SET clock_out = ?, early_leave_reason = ?, tasks_completed = ?
@@ -499,7 +445,6 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     );
 
     if (result.affectedRows === 0) {
-      // Another request won the race
       return res.status(400).json({ message: 'Already clocked out' });
     }
 
@@ -631,8 +576,6 @@ router.get('/early-leave/all', verifyToken, isAdmin, async (req, res) => {
   }
 });
 
-// HARDENING #3: Atomic decision — prevents two admins approving the same
-// request simultaneously, and prevents a race between approve and cancel.
 router.put('/early-leave/:id/decide', verifyToken, isAdmin, async (req, res) => {
   const { approve, admin_note } = req.body || {};
   try {
@@ -644,7 +587,6 @@ router.put('/early-leave/:id/decide', verifyToken, isAdmin, async (req, res) => 
     );
 
     if (result.affectedRows === 0) {
-      // Either doesn't exist or was already decided
       const [rows] = await pool.query(
         'SELECT status FROM early_leave_requests WHERE id = ?',
         [req.params.id]
@@ -678,7 +620,6 @@ router.delete('/early-leave/:id', verifyToken, async (req, res) => {
       return res.status(400).json({ message: 'Only pending requests can be cancelled' });
     }
 
-    // HARDENING #3b: Atomic delete — only deletes if still pending
     const [result] = await pool.query(
       `DELETE FROM early_leave_requests WHERE id = ? AND status = 'pending'`,
       [req.params.id]
@@ -734,6 +675,9 @@ router.get('/all', verifyToken, isAdmin, async (req, res) => {
 // ============================================================
 //  ACTIVITY FEED (admin)
 // ============================================================
+// Includes: clock-ins, clock-outs, early-leave requests/decisions,
+// employee registrations, AND guest check-ins.
+// ============================================================
 router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
   const today = localDateString();
   const from = req.query.from || today;
@@ -743,6 +687,7 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
   try {
     const events = [];
 
+    // ---- 1. Employee attendance (clock-in + clock-out) ----
     const [attendance] = await pool.query(
       `SELECT a.id, a.employee_id, a.attendance_date, a.clock_in, a.clock_out,
               a.status, a.clock_in_mode, a.remote_location, a.remote_selfie,
@@ -802,6 +747,7 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
       }
     });
 
+    // ---- 2. Early-leave requests + decisions ----
     const [earlyLeaves] = await pool.query(
       `SELECT r.id, r.employee_id, r.requested_out_time, r.reason,
               r.status, r.admin_note, r.decided_by, r.decided_at, r.created_at,
@@ -858,6 +804,7 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
       }
     });
 
+    // ---- 3. Employee registrations ----
     const [registrations] = await pool.query(
       `SELECT e.id, e.full_name, e.employee_code, e.email, e.is_approved,
               e.created_at, d.name AS department
@@ -885,6 +832,38 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
       });
     });
 
+    // ---- 4. Guest check-ins ----
+    // guests: id, full_name, phone, gender, service_id, purpose, notes, created_at
+    // Service name lives in `services` (join by service_id).
+    const [guestCheckins] = await pool.query(
+      `SELECT g.id, g.full_name, g.phone, g.purpose, g.created_at,
+              s.name AS service_name
+       FROM guests g
+       LEFT JOIN services s ON g.service_id = s.id
+       WHERE DATE(g.created_at) BETWEEN ? AND ?`,
+      [from, to]
+    );
+
+    guestCheckins.forEach((g) => {
+      events.push({
+        id: `guest-${g.id}`,
+        kind: 'guest-checkin',
+        at: g.created_at,
+        employee: null,
+        meta: {
+          guest_id: g.id,
+          full_name: g.full_name,
+          phone: g.phone || null,
+          service_name: g.service_name || null,
+          purpose: g.purpose || null,
+          time: g.created_at
+            ? new Date(g.created_at).toTimeString().slice(0, 8)
+            : null,
+        },
+      });
+    });
+
+    // ---- Sort all events newest-first, cap at limit ----
     events.sort((a, b) => {
       const ta = a.at ? new Date(a.at).getTime() : 0;
       const tb = b.at ? new Date(b.at).getTime() : 0;
