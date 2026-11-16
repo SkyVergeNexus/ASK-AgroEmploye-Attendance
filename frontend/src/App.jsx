@@ -16,6 +16,9 @@ import Departments from './pages/Departments';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import EarlyLeaveRequests from './pages/EarlyLeaveRequests';
+import GuestRegister from './pages/GuestRegister';
+import Guests from './pages/Guests';
+import Services from './pages/Services';                // ← NEW
 
 function AppLayout() {
   const { user } = useAuth();
@@ -33,7 +36,6 @@ function AppLayout() {
       )}
 
       <div className="flex-1 min-w-0 flex flex-col md:h-screen md:overflow-hidden">
-        {/* Mobile top bar */}
         <header className="md:hidden sticky top-0 z-30 bg-green-900 text-white px-4 py-3 flex items-center justify-between">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -46,7 +48,6 @@ function AppLayout() {
           <span className="w-6" />
         </header>
 
-        {/* Content area — scrolls independently on desktop */}
         <main className="flex-1 min-w-0 p-4 md:p-6 md:overflow-y-auto">
           <Outlet />
         </main>
@@ -65,9 +66,12 @@ function Shell() {
 
   return (
     <Routes>
+      {/* Public routes */}
       <Route path="/login" element={user ? <Navigate to={home} /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to={home} /> : <Register />} />
+      <Route path="/guest" element={<GuestRegister />} />
 
+      {/* Authenticated routes */}
       <Route element={user ? <AppLayout /> : <Navigate to="/login" replace />}>
         <Route path="/dashboard" element={<EmployeeRoute><Dashboard /></EmployeeRoute>} />
         <Route path="/attendance" element={<EmployeeRoute><AttendanceHistory /></EmployeeRoute>} />
@@ -75,6 +79,8 @@ function Shell() {
         <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
         <Route path="/early-leave" element={<AdminRoute><EarlyLeaveRequests /></AdminRoute>} />
         <Route path="/employees" element={<AdminRoute><Employees /></AdminRoute>} />
+        <Route path="/services" element={<AdminRoute><Services /></AdminRoute>} />   {/* ← NEW */}
+        <Route path="/guests" element={<AdminRoute><Guests /></AdminRoute>} />
         <Route path="/departments" element={<AdminRoute><Departments /></AdminRoute>} />
         <Route path="/reports" element={<AdminRoute><Reports /></AdminRoute>} />
         <Route path="/settings" element={<AdminRoute><Settings /></AdminRoute>} />

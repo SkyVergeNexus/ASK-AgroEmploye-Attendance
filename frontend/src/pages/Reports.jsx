@@ -49,8 +49,14 @@ const statusOptions = [
 ];
 
 export default function Reports() {
-  const today = dayjs();
-  const [range, setRange] = useState([today, today]);
+  // ═══════════ DEFAULT RANGE: start of current year → today ═══════════
+  // This ensures the page loads ALL records for the year by default,
+  // not just today's. User can narrow down with the RangePicker.
+  const [range, setRange] = useState([
+    dayjs().startOf('year'),
+    dayjs().endOf('day'),
+  ]);
+
   const [rows, setRows] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -62,7 +68,7 @@ export default function Reports() {
   const [employeeFilter, setEmployeeFilter] = useState([]);
   const [departmentFilter, setDepartmentFilter] = useState([]);
   const [genderFilter, setGenderFilter] = useState([]);
-  const [quickRange, setQuickRange] = useState('today');
+  const [quickRange, setQuickRange] = useState('year');   // matches default range
 
   // Detail modal
   const [viewing, setViewing] = useState(null);
@@ -127,13 +133,33 @@ export default function Reports() {
       to = dayjs().endOf('month');
     } else if (key === 'year') {
       from = dayjs().startOf('year');
-      to = dayjs().endOf('year');
+      to = dayjs().endOf('day');
+    } else if (key === 'all') {
+      // Fetch EVERYTHING the backend has — no date filter
+      setRange([null, null]);
+      loadAllRecords();
+      return;
     } else {
       return;
     }
     setRange([from, to]);
     load(from, to);
   };
+
+  // ── Load all records with no date filter ──
+  const loadAllRecords = useCallback(async () => {
+    setLoading(true);
+    try {
+      // The backend accepts from/to as optional — passing neither returns
+      // every attendance row in the database.
+      const { data } = await api.get('/attendance/all', { params: {} });
+      setRows(data);
+    } catch (err) {
+      message.error(err.response?.data?.message || 'Failed to load reports');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const applyRange = (values) => {
     if (!values || values.length !== 2) return;
@@ -262,12 +288,14 @@ export default function Reports() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `attendance_${range[0].format('YYYY-MM-DD')}_to_${range[1].format('YYYY-MM-DD')}.csv`;
+    const label = range[0] && range[1]
+      ? `${range[0].format('YYYY-MM-DD')}_to_${range[1].format('YYYY-MM-DD')}`
+      : 'all_records';
+    a.download = `attendance_${label}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // ── 5 core columns + View ──
   const columns = [
     {
       title: 'Date',
@@ -341,7 +369,6 @@ export default function Reports() {
     },
   ];
 
-  // ── Mobile compact card ──
   const renderMobileCard = (row) => {
     const meta = STATUS_META[row.status] || { accent: '#94a3b8', bg: '#f8fafc', label: row.status };
     const isRemote = row.clock_in_mode === 'remote';
@@ -437,7 +464,6 @@ export default function Reports() {
     );
   };
 
-  // ── Detail modal — full record view ──
   const renderDetailModal = () => {
     if (!viewing) return null;
     const r = viewing;
@@ -461,7 +487,6 @@ export default function Reports() {
         }
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {/* Identity card */}
           <Card
             size="small"
             bordered={false}
@@ -488,7 +513,6 @@ export default function Reports() {
             </Space>
           </Card>
 
-          {/* Core times */}
           <Descriptions
             column={2}
             size="small"
@@ -522,7 +546,6 @@ export default function Reports() {
             </Descriptions.Item>
           </Descriptions>
 
-          {/* Remote-specific */}
           {isRemote && (
             <>
               <Divider style={{ margin: '4px 0' }}>Remote activity</Divider>
@@ -533,9 +556,7 @@ export default function Reports() {
                 bordered
                 labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
               >
-                <Descriptions.Item
-                  label={<><EnvironmentOutlined /> Location</>}
-                >
+                <Descriptions.Item label={<><EnvironmentOutlined /> Location</>}>
                   {r.remote_location || <Text type="secondary">Not recorded</Text>}
                 </Descriptions.Item>
                 <Descriptions.Item label="GPS coordinates">
@@ -547,9 +568,7 @@ export default function Reports() {
                     <Text type="secondary">Not captured</Text>
                   )}
                 </Descriptions.Item>
-                <Descriptions.Item
-                  label={<><CameraOutlined /> Selfie</>}
-                >
+                <Descriptions.Item label={<><CameraOutlined /> Selfie</>}>
                   {r.remote_selfie ? (
                     <Image
                       src={API_ORIGIN + r.remote_selfie}
@@ -593,7 +612,6 @@ export default function Reports() {
             </>
           )}
 
-          {/* Early leave */}
           {r.early_leave_reason && (
             <>
               <Divider style={{ margin: '4px 0' }}>Early leave</Divider>
@@ -660,12 +678,13 @@ export default function Reports() {
               <Button size="small" type={quickRange === 'week' ? 'primary' : 'default'} onClick={() => applyQuickRange('week')}>This Week</Button>
               <Button size="small" type={quickRange === 'month' ? 'primary' : 'default'} onClick={() => applyQuickRange('month')}>This Month</Button>
               <Button size="small" type={quickRange === 'year' ? 'primary' : 'default'} onClick={() => applyQuickRange('year')}>This Year</Button>
+              <Button size="small" type={quickRange === 'all' ? 'primary' : 'default'} onClick={() => applyQuickRange('all')}>All</Button>
             </Space>
           </Col>
           <Col xs={24} md={12}>
             <Space wrap>
               <Text strong>Range:</Text>
-              <RangePicker value={range} onChange={applyRange} allowClear={false} />
+              <RangePicker value={range[0] && range[1] ? range : null} onChange={applyRange} allowClear={false} />
             </Space>
           </Col>
         </Row>

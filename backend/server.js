@@ -11,7 +11,6 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ---------- STATIC ASSETS ----------
-// Serves uploaded profile pictures AND login/register cover images
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ---------- API ROUTES ----------
@@ -22,6 +21,8 @@ app.use('/api/departments', require('./routes/departments'));
 app.use('/api/roles', require('./routes/roles'));
 app.use('/api/profile', require('./routes/profile'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/guests', require('./routes/guests'));
+app.use('/api/services', require('./routes/services'));   // ← NEW
 
 // ---------- HEALTH CHECK ----------
 app.get('/', (_, res) =>
@@ -34,8 +35,6 @@ app.use((req, res) => {
 });
 
 // ---------- GLOBAL ERROR HANDLER ----------
-// Catches any uncaught throw from a route so the process doesn't crash.
-// Multer errors (file too large, wrong type) also land here.
 app.use((err, req, res, next) => {
   console.error('[server error]', err.message);
   if (err.code === 'LIMIT_FILE_SIZE') {

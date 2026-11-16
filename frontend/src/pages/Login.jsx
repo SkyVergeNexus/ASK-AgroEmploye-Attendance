@@ -16,7 +16,6 @@ import { API_ORIGIN } from '../config';
 
 const { Title, Text } = Typography;
 
-// Default fallback — soft green gradient matching the ASK brand
 const DEFAULT_GRADIENT =
   'linear-gradient(135deg, #065f46 0%, #047857 50%, #065f46 100%)';
 
@@ -28,17 +27,13 @@ export default function Login() {
   const [pendingOpen, setPendingOpen] = useState(false);
   const [pendingEmail, setPendingEmail] = useState('');
 
-  // Cover image state
   const [coverUrl, setCoverUrl] = useState(null);
 
-  // Load public settings (company name + cover URL) — no auth needed
   useEffect(() => {
     fetch(API_ORIGIN + '/api/settings/public')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setCoverUrl(d?.login_cover_url || null))
-      .catch(() => {
-        /* ignore — fall back to gradient */
-      });
+      .catch(() => {});
   }, []);
 
   const backgroundStyle = coverUrl
@@ -87,7 +82,6 @@ export default function Login() {
         position: 'relative',
       }}
     >
-      {/* Dark overlay for readability over any background image */}
       <div
         style={{
           position: 'absolute',
@@ -97,18 +91,24 @@ export default function Login() {
         }}
       />
 
-      {/* White form card */}
       <div
-        className="bg-white p-8 rounded-lg shadow-xl w-96 max-w-full"
-        style={{ position: 'relative', zIndex: 1 }}
+        className="bg-white rounded-xl shadow-xl w-full"
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          maxWidth: 400,
+          padding: '36px 28px',
+        }}
       >
+        {/* Brand */}
         <div className="text-center mb-6">
-          <Title level={3} style={{ marginBottom: 0, color: '#065f46' }}>
+          <Title level={3} style={{ marginBottom: 4, color: '#065f46' }}>
             ASK Agrobusiness
           </Title>
           <Text type="secondary">Attendance System</Text>
         </div>
 
+        {/* Login form */}
         <Form
           form={form}
           layout="vertical"
@@ -142,26 +142,35 @@ export default function Login() {
             />
           </Form.Item>
 
-          <Form.Item style={{ marginBottom: 8 }}>
+          <Form.Item style={{ marginBottom: 12 }}>
             <Button
               type="primary"
               htmlType="submit"
               loading={busy}
               block
               size="large"
-              style={{ backgroundColor: '#15803d' }}
+              style={{ backgroundColor: '#15803d', height: 46, fontWeight: 600 }}
             >
               {busy ? 'Signing in...' : 'Sign In'}
             </Button>
           </Form.Item>
         </Form>
 
-        <p className="text-sm text-center mt-2 text-gray-600">
-          No account?{' '}
-          <Link to="/register" className="text-green-700 font-medium">
-            Register
-          </Link>
-        </p>
+        {/* Footer links */}
+        <div className="text-center text-sm" style={{ color: '#64748b' }}>
+          <div>
+            No account?{' '}
+            <Link to="/register" style={{ color: '#065f46', fontWeight: 600 }}>
+              Register
+            </Link>
+          </div>
+          <div style={{ marginTop: 6 }}>
+            Just visiting?{' '}
+            <Link to="/guest" style={{ color: '#065f46', fontWeight: 600 }}>
+              Continue as Guest
+            </Link>
+          </div>
+        </div>
       </div>
 
       {/* Pending approval modal */}
@@ -192,8 +201,10 @@ export default function Login() {
             <div style={{ fontSize: 13, lineHeight: 1.6 }}>
               <div>• You'll be able to sign in once your account is approved.</div>
               <div>• This usually takes a few minutes during working hours.</div>
-              <div>• If you believe this is taking too long, contact HR or your
-                supervisor and mention the email below.</div>
+              <div>
+                • If you believe this is taking too long, contact HR or your
+                supervisor and mention the email below.
+              </div>
             </div>
           }
         />
