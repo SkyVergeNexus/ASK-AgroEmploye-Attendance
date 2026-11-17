@@ -18,7 +18,7 @@ import Settings from './pages/Settings';
 import EarlyLeaveRequests from './pages/EarlyLeaveRequests';
 import GuestRegister from './pages/GuestRegister';
 import Guests from './pages/Guests';
-import Services from './pages/Services';                // ← NEW
+import Services from './pages/Services';
 
 function AppLayout() {
   const { user } = useAuth();
@@ -79,7 +79,7 @@ function Shell() {
         <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
         <Route path="/early-leave" element={<AdminRoute><EarlyLeaveRequests /></AdminRoute>} />
         <Route path="/employees" element={<AdminRoute><Employees /></AdminRoute>} />
-        <Route path="/services" element={<AdminRoute><Services /></AdminRoute>} />   {/* ← NEW */}
+        <Route path="/services" element={<AdminRoute><Services /></AdminRoute>} />
         <Route path="/guests" element={<AdminRoute><Guests /></AdminRoute>} />
         <Route path="/departments" element={<AdminRoute><Departments /></AdminRoute>} />
         <Route path="/reports" element={<AdminRoute><Reports /></AdminRoute>} />

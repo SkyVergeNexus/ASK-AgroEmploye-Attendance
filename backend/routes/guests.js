@@ -1,7 +1,7 @@
 const express = require('express');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
-const { pickEmployeeForService } = require('../helpers/assignment');
+const { getEmployeeSuggestions } = require('../helpers/assignment');
 const router = express.Router();
 
 // ============ PUBLIC: GUEST REGISTRATION ============
@@ -9,14 +9,26 @@ router.post('/register', async (req, res) => {
   const { full_name, phone, gender, service_id, purpose, notes } = req.body || {};
 
   try {
-    if (!full_name?.trim()) {
+    if (typeof full_name !== 'string' || !full_name.trim()) {
       return res.status(400).json({ message: 'Full name is required' });
     }
-    if (!phone?.trim()) {
+    if (full_name.trim().length > 120) {
+      return res.status(400).json({ message: 'Full name must be 120 characters or fewer' });
+    }
+    if (typeof phone !== 'string' || !phone.trim()) {
       return res.status(400).json({ message: 'Phone number is required' });
+    }
+    if (phone.trim().length > 30) {
+      return res.status(400).json({ message: 'Phone number must be 30 characters or fewer' });
     }
     if (!service_id) {
       return res.status(400).json({ message: 'Please select a service' });
+    }
+    if (gender && !['male', 'female', 'other'].includes(gender)) {
+      return res.status(400).json({ message: 'Invalid gender' });
+    }
+    if (typeof purpose !== 'string' || !purpose.trim()) {
+      return res.status(400).json({ message: 'Please describe the purpose of your visit' });
     }
 
     const [svcRows] = await pool.query(
@@ -26,46 +38,31 @@ router.post('/register', async (req, res) => {
     if (!svcRows.length || !svcRows[0].is_active) {
       return res.status(400).json({ message: 'Invalid or inactive service' });
     }
-    const svc = svcRows[0];
-
-    let purposeText = purpose?.trim();
-    if (svc.name === 'Other' && !purposeText) {
-      return res.status(400).json({
-        message: 'Please describe the purpose of your visit',
-      });
-    }
-    if (purposeText && purposeText.length > 255) {
+    const purposeText = purpose.trim();
+    if (purposeText.length > 255) {
       return res.status(400).json({ message: 'Purpose must be 255 characters or fewer' });
     }
-    if (notes && notes.length > 1000) {
+    if (notes && (typeof notes !== 'string' || notes.length > 1000)) {
       return res.status(400).json({ message: 'Notes must be 1000 characters or fewer' });
     }
 
-    // Auto-assign based on service → department/role match
-    const assignedEmployeeId = await pickEmployeeForService(pool, service_id);
-
     const [result] = await pool.query(
-      `INSERT INTO guests
-         (full_name, phone, gender, service_id, purpose, notes,
-          assigned_employee_id, assigned_at, assignment_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO guests (full_name, phone, gender, service_id, purpose, notes)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
         full_name.trim(),
         phone.trim(),
         gender || null,
         service_id,
-        purposeText || svc.name,
-        notes?.trim() || null,
-        assignedEmployeeId,
-        assignedEmployeeId ? new Date() : null,
-        assignedEmployeeId ? 'pending' : null,
+        purposeText,
+        typeof notes === 'string' ? notes.trim() || null : null,
       ]
     );
 
     res.status(201).json({
-      message: 'Thank you for signing in. The team has been notified.',
+      message: 'Thank you for signing in. Your visit has been registered.',
       guest_id: result.insertId,
-      assigned: Boolean(assignedEmployeeId),
+      assigned: false,
     });
   } catch (err) {
     console.error('[guests] register:', err.message);
@@ -79,7 +76,7 @@ router.get('/mine', verifyToken, async (req, res) => {
   try {
     let sql = `
       SELECT g.id, g.full_name, g.phone, g.gender, g.purpose, g.notes,
-             g.created_at, g.assigned_at, g.assignment_status,
+             g.created_at, g.assigned_at, g.completed_at, g.assignment_status,
              s.name AS service_name
       FROM guests g
       LEFT JOIN services s ON g.service_id = s.id
@@ -96,6 +93,67 @@ router.get('/mine', verifyToken, async (req, res) => {
   } catch (err) {
     console.error('[guests] mine:', err.message);
     res.status(500).json({ message: 'Failed to load assigned guests' });
+  }
+});
+
+// ============ ADMIN: STAFF SUGGESTIONS FOR A GUEST ============
+router.get('/:id/suggestions', verifyToken, isAdmin, async (req, res) => {
+  try {
+    const [guestRows] = await pool.query(
+      `SELECT g.id, g.service_id, g.purpose, s.name AS service_name
+       FROM guests g
+       LEFT JOIN services s ON s.id = g.service_id
+       WHERE g.id = ?`,
+      [req.params.id]
+    );
+    if (!guestRows.length) {
+      return res.status(404).json({ message: 'Guest not found' });
+    }
+
+    const guest = guestRows[0];
+    if (!guest.service_id) {
+      return res.json({
+        service: null,
+        service_name: guest.service_name,
+        employees: [],
+        message: 'This guest has no recorded service, so staff cannot be matched. Assign a service to the guest before choosing an employee.',
+      });
+    }
+
+    const suggestions = await getEmployeeSuggestions(
+      pool,
+      guest.service_id,
+      guest.purpose
+    );
+    if (
+      !suggestions.service?.department_id &&
+      !suggestions.service?.role_id &&
+      !suggestions.service?.assigned_employee_id
+    ) {
+      return res.json({
+        service: suggestions.service,
+        service_name: guest.service_name,
+        employees: [],
+        message: 'This service has no linked staff profile. Update it on the Services page before assigning a guest.',
+      });
+    }
+
+    const hasProfileMatches = suggestions.employees.some(
+      (employee) => employee.profile_match
+    );
+    res.json({
+      service: suggestions.service,
+      service_name: guest.service_name,
+      employees: suggestions.employees,
+      message: hasProfileMatches
+        ? null
+        : suggestions.employees.length
+          ? 'No active, approved employees match this service. Update its department, role, or assigned employee on the Services page.'
+          : 'No active, approved employees match this service. Update its department, role, or assigned employee on the Services page.',
+    });
+  } catch (err) {
+    console.error('[guests] suggestions:', err.message);
+    res.status(500).json({ message: 'Failed to load staff suggestions' });
   }
 });
 
@@ -120,9 +178,9 @@ router.put('/:id/status', verifyToken, async (req, res) => {
 
     const from = rows[0].assignment_status;
     const legal =
-      (from === 'pending' && status === 'accepted') ||
+      (from === 'assigned' && status === 'accepted') ||
       (from === 'accepted' && status === 'completed') ||
-      (from === 'pending' && status === 'cancelled') ||
+      (from === 'assigned' && status === 'cancelled') ||
       (from === 'accepted' && status === 'cancelled') ||
       isAdminUser;
 
@@ -130,10 +188,17 @@ router.put('/:id/status', verifyToken, async (req, res) => {
       return res.status(400).json({ message: `Cannot move from ${from} to ${status}` });
     }
 
-    await pool.query(
-      'UPDATE guests SET assignment_status = ? WHERE id = ?',
-      [status, req.params.id]
-    );
+    if (status === 'completed') {
+      await pool.query(
+        'UPDATE guests SET assignment_status = ?, completed_at = NOW() WHERE id = ?',
+        [status, req.params.id]
+      );
+    } else {
+      await pool.query(
+        'UPDATE guests SET assignment_status = ? WHERE id = ?',
+        [status, req.params.id]
+      );
+    }
     res.json({ message: `Marked ${status}` });
   } catch (err) {
     console.error('[guests] status:', err.message);
@@ -146,19 +211,89 @@ router.put('/:id/reassign', verifyToken, isAdmin, async (req, res) => {
   const { employee_id } = req.body || {};
   if (!employee_id) return res.status(400).json({ message: 'employee_id required' });
   try {
+    const [guestRows] = await pool.query(
+      'SELECT id, service_id FROM guests WHERE id = ?',
+      [req.params.id]
+    );
+    if (!guestRows.length) return res.status(404).json({ message: 'Guest not found' });
+
     const [emp] = await pool.query(
-      'SELECT id FROM employees WHERE id = ? AND is_active = 1 AND is_approved = 1',
+      `SELECT id, department_id, role_id FROM employees
+       WHERE id = ? AND system_role = 'employee'
+         AND is_active = 1 AND is_approved = 1`,
       [employee_id]
     );
     if (!emp.length) return res.status(400).json({ message: 'Invalid employee' });
 
+    if (!guestRows[0].service_id) {
+      return res.status(400).json({
+        message: 'This guest has no recorded service. Staff cannot be matched yet.',
+      });
+    }
+
+    const [serviceRows] = await pool.query(
+      `SELECT department_id, role_id, assigned_employee_id
+       FROM services
+       WHERE id = ?`,
+      [guestRows[0].service_id]
+    );
+    const service = serviceRows[0];
+    if (!service) {
+      return res.status(400).json({ message: 'The guest service is no longer available' });
+    }
+    if (!service.department_id && !service.role_id && !service.assigned_employee_id) {
+      return res.status(400).json({
+        message: 'This service has no linked staff profile. Update it on the Services page.',
+      });
+    }
+
+    const isServiceContact =
+      Number(service.assigned_employee_id) === Number(emp[0].id);
+    const matchesDepartment = service.department_id &&
+      Number(service.department_id) === Number(emp[0].department_id);
+    const matchesRole = service.role_id &&
+      Number(service.role_id) === Number(emp[0].role_id);
+    const isEligible = isServiceContact ||
+      (service.department_id && service.role_id
+        ? matchesDepartment && matchesRole
+        : service.department_id
+          ? matchesDepartment
+          : matchesRole);
+
+    if (!isEligible) {
+      return res.status(400).json({
+        message: 'Choose an employee who matches this service profile',
+      });
+    }
+
     await pool.query(
       `UPDATE guests
-       SET assigned_employee_id = ?, assigned_at = NOW(), assignment_status = 'pending'
+       SET assigned_employee_id = ?, assigned_at = NOW(), assigned_by = ?,
+           assignment_status = 'assigned', completed_at = NULL
        WHERE id = ?`,
-      [employee_id, req.params.id]
+      [employee_id, req.user.id, req.params.id]
     );
-    res.json({ message: 'Reassigned' });
+    const [assignedGuestRows] = await pool.query(
+      `SELECT g.*,
+              s.name AS service_name,
+              e.full_name AS assigned_employee_name,
+              e.employee_code AS assigned_employee_code,
+              e.profile_picture AS assigned_employee_picture,
+              e.email AS assigned_employee_email,
+              e.phone AS assigned_employee_phone,
+              d.name AS assigned_employee_department,
+              r.name AS assigned_employee_role,
+              a.full_name AS assigned_by_name
+       FROM guests g
+       LEFT JOIN services s ON g.service_id = s.id
+       LEFT JOIN employees e ON g.assigned_employee_id = e.id
+       LEFT JOIN departments d ON e.department_id = d.id
+       LEFT JOIN roles r ON e.role_id = r.id
+       LEFT JOIN employees a ON g.assigned_by = a.id
+       WHERE g.id = ?`,
+      [req.params.id]
+    );
+    res.json({ message: 'Employee assigned', guest: assignedGuestRows[0] });
   } catch (err) {
     console.error('[guests] reassign:', err.message);
     res.status(500).json({ message: 'Reassign failed' });
@@ -173,10 +308,19 @@ router.get('/', verifyToken, isAdmin, async (req, res) => {
     SELECT g.*,
            s.name AS service_name,
            e.full_name AS assigned_employee_name,
-           e.employee_code AS assigned_employee_code
+           e.employee_code AS assigned_employee_code,
+           e.profile_picture AS assigned_employee_picture,
+           e.email AS assigned_employee_email,
+           e.phone AS assigned_employee_phone,
+           d.name AS assigned_employee_department,
+           r.name AS assigned_employee_role,
+           a.full_name AS assigned_by_name
     FROM guests g
     LEFT JOIN services s ON g.service_id = s.id
     LEFT JOIN employees e ON g.assigned_employee_id = e.id
+    LEFT JOIN departments d ON e.department_id = d.id
+    LEFT JOIN roles r ON e.role_id = r.id
+    LEFT JOIN employees a ON g.assigned_by = a.id
     WHERE 1 = 1
   `;
   const params = [];

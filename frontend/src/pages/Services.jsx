@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   Card, Table, Tag, Button, Typography, Space, Row, Col, Statistic,
-  Input, Grid, message, Popconfirm, Empty, Modal, Form, Switch,
+  Input, Select, Grid, message, Popconfirm, Empty, Modal, Form, Switch,
 } from 'antd';
 import {
   PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined,
@@ -19,7 +19,12 @@ export default function Services() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [departments, setDepartments] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [form] = Form.useForm();
+  const selectedDepartment = Form.useWatch('department_id', form);
+  const selectedRole = Form.useWatch('role_id', form);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -27,8 +32,24 @@ export default function Services() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await api.get('/services/all');
-      setRows(data);
+      const [serviceResponse, departmentResponse, roleResponse, employeeResponse] =
+        await Promise.all([
+          api.get('/services/all'),
+          api.get('/departments'),
+          api.get('/roles'),
+          api.get('/employees'),
+        ]);
+      setRows(serviceResponse.data);
+      setDepartments(departmentResponse.data);
+      setRoles(roleResponse.data);
+      setEmployees(
+        employeeResponse.data.filter(
+          (employee) =>
+            employee.system_role === 'employee' &&
+            employee.is_active &&
+            employee.is_approved
+        )
+      );
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load services');
     } finally {
@@ -53,6 +74,9 @@ export default function Services() {
       name: row.name,
       description: row.description || '',
       is_active: !!row.is_active,
+      department_id: row.department_id,
+      role_id: row.role_id || undefined,
+      assigned_employee_id: row.assigned_employee_id,
     });
     setModalOpen(true);
   };
@@ -95,6 +119,12 @@ export default function Services() {
     inactive: rows.filter((r) => !r.is_active).length,
   };
 
+  const matchingEmployees = employees.filter(
+    (employee) =>
+      Number(employee.department_id) === Number(selectedDepartment) &&
+      (!selectedRole || Number(employee.role_id) === Number(selectedRole))
+  );
+
   const columns = [
     {
       title: 'Service',
@@ -107,6 +137,28 @@ export default function Services() {
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
               {row.description}
             </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Department / Role',
+      key: 'department_role',
+      render: (_, row) => (
+        <div>
+          <div>{row.department_name || '—'}</div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>{row.role_name || 'All roles'}</div>
+        </div>
+      ),
+    },
+    {
+      title: 'Assigned employee',
+      key: 'assigned_employee',
+      render: (_, row) => (
+        <div>
+          <div style={{ fontWeight: 500 }}>{row.assigned_employee_name || 'Not assigned'}</div>
+          {row.assigned_employee_code && (
+            <div style={{ fontSize: 11, color: '#64748b' }}>{row.assigned_employee_code}</div>
           )}
         </div>
       ),
@@ -169,6 +221,12 @@ export default function Services() {
               {r.description}
             </div>
           )}
+          <div style={{ fontSize: 12, color: '#475569', marginTop: 6 }}>
+            {r.department_name || 'No department'}{r.role_name ? ` · ${r.role_name}` : ''}
+          </div>
+          <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
+            Staff: {r.assigned_employee_name || 'Not assigned'}
+          </div>
         </div>
         {r.is_active ? (
           <Tag color="green" style={{ margin: 0 }}>Active</Tag>
@@ -203,7 +261,7 @@ export default function Services() {
             Services
           </Title>
           <Text type="secondary">
-            Services that guests can pick when checking in
+            Link each guest service to the right department, role, and employee.
           </Text>
         </div>
         <Space>
@@ -289,6 +347,60 @@ export default function Services() {
               placeholder="e.g. Interviews, appointments, HR consultations"
               showCount
               maxLength={255}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="Department"
+            name="department_id"
+            rules={[{ required: true, message: 'Select a department' }]}
+          >
+            <Select
+              placeholder="Choose a department"
+              options={departments.map((department) => ({
+                value: department.id,
+                label: department.name,
+              }))}
+              onChange={() => {
+                form.setFieldsValue({
+                  role_id: undefined,
+                  assigned_employee_id: undefined,
+                });
+              }}
+            />
+          </Form.Item>
+
+          <Form.Item label="Role (optional)" name="role_id">
+            <Select
+              allowClear
+              disabled={!selectedDepartment}
+              placeholder={selectedDepartment ? 'All roles in department' : 'Choose a department first'}
+              options={roles
+                .filter((role) => Number(role.department_id) === Number(selectedDepartment))
+                .map((role) => ({ value: role.id, label: role.name }))}
+              onChange={() => form.setFieldValue('assigned_employee_id', undefined)}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="Assigned employee"
+            name="assigned_employee_id"
+            rules={[{ required: true, message: 'Assign an active employee to this service' }]}
+            extra={
+              matchingEmployees.length
+                ? `${matchingEmployees.length} active, approved employee${matchingEmployees.length === 1 ? '' : 's'} match this department and role.`
+                : 'No active, approved employees match. Add or approve an employee with this profile first.'
+            }
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              disabled={!selectedDepartment || matchingEmployees.length === 0}
+              placeholder="Choose a matching employee"
+              options={matchingEmployees.map((employee) => ({
+                value: employee.id,
+                label: `${employee.full_name} (${employee.employee_code})${employee.role_name ? ` · ${employee.role_name}` : ''}`,
+              }))}
             />
           </Form.Item>
 

@@ -4,7 +4,7 @@ import { CheckOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import api from '../api/axios';
 
 const STATUS_COLOR = {
-  pending: 'orange',
+  assigned: 'cyan',
   accepted: 'blue',
   completed: 'green',
   cancelled: 'red',
@@ -42,15 +42,15 @@ export default function AssignedGuestsCard() {
     }
   };
 
-  const pendingCount = rows.filter((r) => r.assignment_status === 'pending').length;
+  const assignedCount = rows.filter((r) => r.assignment_status === 'assigned').length;
 
   return (
     <Card
       title={
         <Space>
           <span>My Assigned Guests</span>
-          {pendingCount > 0 && (
-            <Badge count={pendingCount} style={{ backgroundColor: '#d97706' }} />
+          {assignedCount > 0 && (
+            <Badge count={assignedCount} style={{ backgroundColor: '#0891b2' }} />
           )}
         </Space>
       }
@@ -66,10 +66,10 @@ export default function AssignedGuestsCard() {
           renderItem={(g) => (
             <List.Item
               actions={[
-                g.assignment_status === 'pending' && (
+                g.assignment_status === 'assigned' && (
                   <Button key="accept" type="primary" size="small" icon={<CheckOutlined />}
                     onClick={() => setStatus(g.id, 'accepted')}>
-                    Accept
+                    Confirm
                   </Button>
                 ),
                 g.assignment_status === 'accepted' && (
