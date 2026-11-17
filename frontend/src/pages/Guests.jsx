@@ -335,7 +335,7 @@ export default function Guests() {
           </Space>
         }
         centered
-        width={isMobile ? 'calc(100vw - 24px)' : 560}
+        width={screens.lg ? 900 : 'calc(100vw - 24px)'}
         title={
           <Space>
             <UserOutlined />
@@ -344,90 +344,93 @@ export default function Guests() {
           </Space>
         }
       >
-        <Descriptions
-          title="Guest information"
-          column={1}
-          size="small"
-          bordered
-          labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
-        >
-          <Descriptions.Item label="Guest record">#{r.id}</Descriptions.Item>
-          <Descriptions.Item label="Full Name">{r.full_name}</Descriptions.Item>
-          <Descriptions.Item label="Phone">{r.phone}</Descriptions.Item>
-          <Descriptions.Item label="Gender">{r.gender || '—'}</Descriptions.Item>
-          <Descriptions.Item label="Service">
-            {r.service_name || '—'}
-          </Descriptions.Item>
-          <Descriptions.Item label="Purpose">{r.purpose}</Descriptions.Item>
-          <Descriptions.Item label="Signed in">
-            {dayjs(r.created_at).format('dddd, DD MMM YYYY · HH:mm')}
-          </Descriptions.Item>
-          <Descriptions.Item label="Notes">
-            {r.notes ? (
-              <div style={{ whiteSpace: 'pre-wrap' }}>{r.notes}</div>
-            ) : (
-              <Text type="secondary">None</Text>
+        <div style={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', paddingRight: 4 }}>
+          <Descriptions
+            title="Guest information"
+            column={isMobile ? 1 : 2}
+            size="small"
+            bordered
+            labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
+          >
+            <Descriptions.Item label="Guest record">#{r.id}</Descriptions.Item>
+            <Descriptions.Item label="Full name">{r.full_name}</Descriptions.Item>
+            <Descriptions.Item label="Phone">{r.phone}</Descriptions.Item>
+            <Descriptions.Item label="Gender">{r.gender || '—'}</Descriptions.Item>
+            <Descriptions.Item label="Service">{r.service_name || '—'}</Descriptions.Item>
+            <Descriptions.Item label="Signed in">
+              {dayjs(r.created_at).format('dddd, DD MMM YYYY · HH:mm')}
+            </Descriptions.Item>
+            <Descriptions.Item label="Purpose" span={isMobile ? 1 : 2}>
+              {r.purpose || '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Notes" span={isMobile ? 1 : 2}>
+              {r.notes ? (
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.notes}</div>
+              ) : (
+                <Text type="secondary">None</Text>
+              )}
+            </Descriptions.Item>
+          </Descriptions>
+
+          <Descriptions
+            title="Employee assignment"
+            column={isMobile ? 1 : 2}
+            size="small"
+            bordered
+            style={{ marginTop: 16 }}
+            labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
+          >
+            <Descriptions.Item label="Employee" span={isMobile ? 1 : 2}>
+              {r.assigned_employee_id ? (
+                <Space>
+                  <Avatar
+                    src={r.assigned_employee_picture ? API_ORIGIN + r.assigned_employee_picture : undefined}
+                    icon={<UserOutlined />}
+                  />
+                  <Text strong>{r.assigned_employee_name || `#${r.assigned_employee_id}`}</Text>
+                </Space>
+              ) : (
+                <Tag color="default">Not assigned</Tag>
+              )}
+            </Descriptions.Item>
+            {r.assigned_employee_id && (
+              <>
+                <Descriptions.Item label="Employee ID">
+                  {r.assigned_employee_code || `#${r.assigned_employee_id}`}
+                </Descriptions.Item>
+                <Descriptions.Item label="Department / role">
+                  {[r.assigned_employee_department, r.assigned_employee_role]
+                    .filter(Boolean)
+                    .join(' · ') || 'Not specified'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Employee phone">
+                  {r.assigned_employee_phone || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Employee email">
+                  {r.assigned_employee_email || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Assignment status">
+                  {statusTag(r.assignment_status)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Assigned on">
+                  {r.assigned_at
+                    ? dayjs(r.assigned_at).format('dddd, DD MMM YYYY · HH:mm')
+                    : '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Assigned by">
+                  {r.assigned_by_name || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Attended on">
+                  {r.completed_at
+                    ? dayjs(r.completed_at).format('dddd, DD MMM YYYY · HH:mm')
+                    : r.assignment_status === 'completed'
+                      ? 'Completed (time unavailable)'
+                      : 'Not yet completed'}
+                </Descriptions.Item>
+              </>
             )}
-          </Descriptions.Item>
-        </Descriptions>
-        <Descriptions
-          title="Employee assignment"
-          column={1}
-          size="small"
-          bordered
-          style={{ marginTop: 16 }}
-          labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
-        >
-          <Descriptions.Item label="Employee">
-            {r.assigned_employee_id ? (
-              <Space>
-                <Avatar
-                  src={r.assigned_employee_picture ? API_ORIGIN + r.assigned_employee_picture : undefined}
-                  icon={<UserOutlined />}
-                />
-                <Text strong>{r.assigned_employee_name || `#${r.assigned_employee_id}`}</Text>
-              </Space>
-            ) : (
-              <Tag color="default">Not assigned</Tag>
-            )}
-          </Descriptions.Item>
-          {r.assigned_employee_id && (
-            <>
-              <Descriptions.Item label="Employee ID">
-                {r.assigned_employee_code || `#${r.assigned_employee_id}`}
-              </Descriptions.Item>
-              <Descriptions.Item label="Department / role">
-                {[r.assigned_employee_department, r.assigned_employee_role]
-                  .filter(Boolean)
-                  .join(' · ') || 'Not specified'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Employee phone">
-                {r.assigned_employee_phone || '—'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Employee email">
-                {r.assigned_employee_email || '—'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Assignment status">
-                {statusTag(r.assignment_status)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Assigned on">
-                {r.assigned_at
-                  ? dayjs(r.assigned_at).format('dddd, DD MMM YYYY · HH:mm')
-                  : '—'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Assigned by">
-                {r.assigned_by_name || '—'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Attended on">
-                {r.completed_at
-                  ? dayjs(r.completed_at).format('dddd, DD MMM YYYY · HH:mm')
-                  : r.assignment_status === 'completed'
-                    ? 'Completed (time unavailable)'
-                    : 'Not yet completed'}
-              </Descriptions.Item>
-            </>
-          )}
-        </Descriptions>
+          </Descriptions>
+        </div>
       </Modal>
     );
   };
@@ -449,7 +452,7 @@ export default function Guests() {
       }}
       okText={reassigning?.assigned_employee_id ? 'Update assignment' : 'Assign staff'}
       centered
-      width={isMobile ? 'calc(100vw - 24px)' : 440}
+      width={isMobile ? 'calc(100vw - 24px)' : 600}
     >
       <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
         Choose a profile-matched employee. The assignment will be recorded immediately and the employee can confirm it.
