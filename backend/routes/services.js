@@ -1,3 +1,4 @@
+
 const express = require('express');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
@@ -7,7 +8,10 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT id, name, description FROM services WHERE is_active = 1 ORDER BY name ASC'
+      `SELECT id, name, description
+       FROM services
+       WHERE is_active = 1
+       ORDER BY name ASC`
     );
     res.json(rows);
   } catch (err) {
@@ -20,7 +24,13 @@ router.get('/', async (req, res) => {
 router.get('/all', verifyToken, isAdmin, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT * FROM services ORDER BY is_active DESC, name ASC'
+      `SELECT s.*,
+              d.name AS department_name,
+              r.name AS role_name
+       FROM services s
+       LEFT JOIN departments d ON s.department_id = d.id
+       LEFT JOIN roles r ON s.role_id = r.id
+       ORDER BY s.is_active DESC, s.name ASC`
     );
     res.json(rows);
   } catch (err) {
@@ -31,7 +41,7 @@ router.get('/all', verifyToken, isAdmin, async (req, res) => {
 
 // ============ ADMIN: CREATE ============
 router.post('/', verifyToken, isAdmin, async (req, res) => {
-  const { name, description, is_active } = req.body || {};
+  const { name, description, is_active, department_id, role_id } = req.body || {};
 
   if (!name?.trim()) {
     return res.status(400).json({ message: 'Service name is required' });
@@ -45,8 +55,15 @@ router.post('/', verifyToken, isAdmin, async (req, res) => {
 
   try {
     const [result] = await pool.query(
-      'INSERT INTO services (name, description, is_active) VALUES (?, ?, ?)',
-      [name.trim(), description?.trim() || null, is_active === false ? 0 : 1]
+      `INSERT INTO services (name, description, is_active, department_id, role_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        name.trim(),
+        description?.trim() || null,
+        is_active === false ? 0 : 1,
+        department_id || null,
+        role_id || null,
+      ]
     );
     const [rows] = await pool.query('SELECT * FROM services WHERE id = ?', [result.insertId]);
     res.status(201).json(rows[0]);
@@ -61,7 +78,7 @@ router.post('/', verifyToken, isAdmin, async (req, res) => {
 
 // ============ ADMIN: UPDATE ============
 router.put('/:id', verifyToken, isAdmin, async (req, res) => {
-  const { name, description, is_active } = req.body || {};
+  const { name, description, is_active, department_id, role_id } = req.body || {};
 
   if (!name?.trim()) {
     return res.status(400).json({ message: 'Service name is required' });
@@ -75,8 +92,18 @@ router.put('/:id', verifyToken, isAdmin, async (req, res) => {
 
   try {
     const [result] = await pool.query(
-      'UPDATE services SET name = ?, description = ?, is_active = ? WHERE id = ?',
-      [name.trim(), description?.trim() || null, is_active ? 1 : 0, req.params.id]
+      `UPDATE services
+       SET name = ?, description = ?, is_active = ?,
+           department_id = ?, role_id = ?
+       WHERE id = ?`,
+      [
+        name.trim(),
+        description?.trim() || null,
+        is_active ? 1 : 0,
+        department_id || null,
+        role_id || null,
+        req.params.id,
+      ]
     );
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Service not found' });
@@ -95,7 +122,6 @@ router.put('/:id', verifyToken, isAdmin, async (req, res) => {
 // ============ ADMIN: DELETE ============
 router.delete('/:id', verifyToken, isAdmin, async (req, res) => {
   try {
-    // Check if it's currently used by any guest
     const [used] = await pool.query(
       'SELECT COUNT(*) n FROM guests WHERE service_id = ?',
       [req.params.id]

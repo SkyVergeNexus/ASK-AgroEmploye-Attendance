@@ -70,4 +70,23 @@ router.delete('/:id', verifyToken, isAdmin, async (req, res) => {
   }
 });
 
+// ── GET /employees/preview-assignment/:serviceId ──
+router.get('/preview-assignment/:serviceId', verifyToken, isAdmin, async (req, res) => {
+  try {
+    const { pickEmployeeForService } = require('../helpers/assignment');
+    const id = await pickEmployeeForService(pool, req.params.serviceId);
+    if (!id) {
+      return res.json({ employee_id: null, reason: 'No matching active employee' });
+    }
+    const [rows] = await pool.query(
+      'SELECT id, full_name, employee_code FROM employees WHERE id = ?',
+      [id]
+    );
+    res.json({ employee_id: id, employee: rows[0] });
+  } catch (err) {
+    console.error('[employees] preview:', err.message);
+    res.status(500).json({ message: 'Preview failed' });
+  }
+});
+
 module.exports = router;
