@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   LoginOutlined, LogoutOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  CloseCircleOutlined, UserOutlined, ReloadOutlined, DeleteOutlined,
+  CloseCircleOutlined, CalendarOutlined, UserOutlined, ReloadOutlined, DeleteOutlined,
   EnvironmentOutlined, WifiOutlined, CameraOutlined, HomeOutlined,
   SafetyCertificateOutlined, PlusOutlined,
 } from '@ant-design/icons';
@@ -536,6 +536,10 @@ export default function Dashboard() {
       return { text: '—', hint: 'No work hours set', active: false };
     }
 
+    if (today?.status === 'leave') {
+      return { text: '—', hint: 'Approved leave today', active: false };
+    }
+
     if (!today?.clock_in) {
       return { text: '00:00:00', hint: 'Starts when you clock in', active: false };
     }
@@ -605,7 +609,11 @@ export default function Dashboard() {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      render: (v) => <Tag color={statusColor[v] || 'default'}>{v}</Tag>,
+      render: (v) => (
+        <Tag color={statusColor[v] || 'default'}>
+          {v ? v[0].toUpperCase() + v.slice(1) : '—'}
+        </Tag>
+      ),
     },
   ];
 
@@ -1153,7 +1161,8 @@ export default function Dashboard() {
                 borderLeft: `4px solid ${
                   today?.status === 'present' ? '#16a34a' :
                   today?.status === 'late' ? '#d97706' :
-                  today?.status === 'absent' ? '#dc2626' : '#94a3b8'
+                  today?.status === 'absent' ? '#dc2626' :
+                  today?.status === 'leave' ? '#7c3aed' : '#94a3b8'
                 }`,
               }}
             >
@@ -1164,6 +1173,8 @@ export default function Dashboard() {
                   <ClockCircleOutlined style={{ color: '#d97706', fontSize: 18 }} />
                 ) : today?.status === 'absent' ? (
                   <CloseCircleOutlined style={{ color: '#dc2626', fontSize: 18 }} />
+                ) : today?.status === 'leave' ? (
+                  <CalendarOutlined style={{ color: '#7c3aed', fontSize: 18 }} />
                 ) : (
                   <ClockCircleOutlined style={{ color: '#94a3b8', fontSize: 18 }} />
                 )}
@@ -1177,10 +1188,11 @@ export default function Dashboard() {
                       color:
                         today?.status === 'present' ? '#16a34a' :
                         today?.status === 'late' ? '#d97706' :
-                        today?.status === 'absent' ? '#dc2626' : '#64748b',
+                        today?.status === 'absent' ? '#dc2626' :
+                        today?.status === 'leave' ? '#7c3aed' : '#64748b',
                     }}
                   >
-                    {today?.status || 'Not marked'}
+                    {today?.status === 'leave' ? 'On approved leave' : today?.status || 'Not marked'}
                   </div>
                 </div>
               </div>
@@ -1207,7 +1219,7 @@ export default function Dashboard() {
             <Col xs={24} sm={8}>
               <Statistic
                 title="Status"
-                value={today?.status || 'Not marked'}
+                value={today?.status === 'leave' ? 'On approved leave' : today?.status || 'Not marked'}
                 prefix={
                   today?.status === 'present' ? (
                     <CheckCircleOutlined style={{ color: '#16a34a' }} />
@@ -1215,6 +1227,8 @@ export default function Dashboard() {
                     <ClockCircleOutlined style={{ color: '#d97706' }} />
                   ) : today?.status === 'absent' ? (
                     <CloseCircleOutlined style={{ color: '#dc2626' }} />
+                  ) : today?.status === 'leave' ? (
+                    <CalendarOutlined style={{ color: '#7c3aed' }} />
                   ) : (
                     <ClockCircleOutlined style={{ color: '#94a3b8' }} />
                   )
@@ -1225,6 +1239,7 @@ export default function Dashboard() {
                       today?.status === 'present' ? '#16a34a' :
                       today?.status === 'late' ? '#d97706' :
                       today?.status === 'absent' ? '#dc2626' :
+                      today?.status === 'leave' ? '#7c3aed' :
                       '#64748b',
                   },
                 }}

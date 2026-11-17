@@ -6,7 +6,7 @@ import {
 } from 'antd';
 import {
   FileExcelOutlined, ReloadOutlined, SearchOutlined, FilterOutlined,
-  CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, TeamOutlined,
+  CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, TeamOutlined, CalendarOutlined,
   EyeOutlined, EnvironmentOutlined, CameraOutlined, FileTextOutlined,
   HomeOutlined, WifiOutlined,
 } from '@ant-design/icons';
@@ -241,7 +241,8 @@ export default function Reports() {
     const present = filteredRows.filter((r) => r.status === 'present').length;
     const late = filteredRows.filter((r) => r.status === 'late').length;
     const absent = filteredRows.filter((r) => r.status === 'absent').length;
-    return { total, present, late, absent };
+    const leave = filteredRows.filter((r) => r.status === 'leave').length;
+    return { total, present, late, absent, leave };
   }, [filteredRows]);
 
   const clearFilters = () => {
@@ -255,7 +256,7 @@ export default function Reports() {
   const exportCSV = () => {
     const headers = [
       'Date', 'Code', 'Name', 'Gender', 'Department',
-      'In', 'Out', 'Status', 'Early Leave Reason', 'Clock-in Mode',
+      'In', 'Out', 'Status', 'Attendance Note', 'Early Leave Reason', 'Clock-in Mode',
       'Remote Location', 'Clock-in Latitude', 'Clock-in Longitude',
       'Remote Selfie', 'Tasks Completed',
     ];
@@ -272,6 +273,7 @@ export default function Reports() {
             r.clock_in || '',
             r.clock_out || '',
             r.status,
+            r.notes || '',
             r.early_leave_reason || '',
             r.clock_in_mode || 'onsite',
             r.remote_location || '',
@@ -348,7 +350,11 @@ export default function Reports() {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      render: (v) => <Tag color={statusColor[v] || 'default'}>{v}</Tag>,
+      render: (v) => (
+        <Tag color={statusColor[v] || 'default'}>
+          {STATUS_META[v]?.label || v}
+        </Tag>
+      ),
     },
     {
       title: '',
@@ -401,7 +407,7 @@ export default function Reports() {
             color={statusColor[row.status] || 'default'}
             style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize', flexShrink: 0, fontWeight: 600, fontSize: 11 }}
           >
-            {row.status}
+            {STATUS_META[row.status]?.label || row.status}
           </Tag>
         </div>
 
@@ -497,14 +503,16 @@ export default function Reports() {
             }}
           >
             <Space size={10} align="center">
-              {isRemote ? (
+              {r.status === 'leave' ? (
+                <CalendarOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
+              ) : isRemote ? (
                 <HomeOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
               ) : (
                 <WifiOutlined style={{ fontSize: 20, color: '#1677ff' }} />
               )}
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
-                  {isRemote ? 'Remote work day' : 'On-site work day'}
+                  {r.status === 'leave' ? 'Approved leave' : isRemote ? 'Remote work day' : 'On-site work day'}
                 </div>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {r.employee_code} · {String(r.attendance_date).slice(0, 10)}
@@ -531,10 +539,15 @@ export default function Reports() {
               <Tag color={statusColor[r.status] || 'default'}>{meta.label}</Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Mode">
-              <Tag color={isRemote ? 'purple' : 'blue'}>
-                {isRemote ? 'Remote' : 'On-site'}
+              <Tag color={r.status === 'leave' || isRemote ? 'purple' : 'blue'}>
+                {r.status === 'leave' ? 'Leave' : isRemote ? 'Remote' : 'On-site'}
               </Tag>
             </Descriptions.Item>
+            {r.status === 'leave' && (
+              <Descriptions.Item label="Attendance note" span={2}>
+                {r.notes || 'Approved leave'}
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label="Department" span={2}>
               {r.department_name || <Text type="secondary">Not assigned</Text>}
             </Descriptions.Item>
@@ -774,24 +787,29 @@ export default function Reports() {
 
       {/* Stats */}
       <Row gutter={[16, 16]} className="mb-4">
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Records" value={stats.total} prefix={<TeamOutlined style={{ color: '#1677ff' }} />} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Present" value={stats.present} prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a' }} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Late" value={stats.late} prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />} valueStyle={{ color: '#d97706' }} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Absent" value={stats.absent} prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />} valueStyle={{ color: '#dc2626' }} />
+          </Card>
+        </Col>
+        <Col xs={12} md={8}>
+          <Card bordered={false} className="shadow-sm">
+            <Statistic title="Leave" value={stats.leave} prefix={<CalendarOutlined style={{ color: '#7c3aed' }} />} valueStyle={{ color: '#7c3aed' }} />
           </Card>
         </Col>
       </Row>

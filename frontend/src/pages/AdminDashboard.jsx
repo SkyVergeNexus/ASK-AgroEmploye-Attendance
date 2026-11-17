@@ -8,6 +8,7 @@ import {
   TeamOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  CalendarOutlined,
   CloseCircleOutlined,
   ReloadOutlined,
   SettingOutlined,
@@ -48,7 +49,7 @@ const RECENT_ACTIVITY_LIMIT = 5;
 export default function AdminDashboard() {
   const [dayKey, setDayKey] = useState(getTodayKey());
   const [stats, setStats] = useState({
-    total: 0, present: 0, late: 0, absent: 0, pending_early_leaves: 0,
+    total: 0, present: 0, late: 0, absent: 0, leave: 0, pending_early_leaves: 0,
   });
   const [earlyRequests, setEarlyRequests] = useState([]);
   const [activity, setActivity] = useState([]);
@@ -358,11 +359,11 @@ export default function AdminDashboard() {
       )}
 
       {/* ═══════════════ STAT CARDS ═══════════════
-          Cleaner layout: 4 equal cards on desktop,
+          Cleaner layout: 5 cards on desktop,
           2×2 on tablet, stacked on phone.
           Guest count is folded into the "Present Today" card's subtitle. */}
       <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
             <Statistic
               title="Employees"
@@ -375,7 +376,7 @@ export default function AdminDashboard() {
           </Card>
         </Col>
 
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
             <Statistic
               title="Present Today"
@@ -389,7 +390,7 @@ export default function AdminDashboard() {
           </Card>
         </Col>
 
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
             <Statistic
               title="Late Today"
@@ -403,7 +404,7 @@ export default function AdminDashboard() {
           </Card>
         </Col>
 
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card
             bordered={false}
             className="shadow-sm"
@@ -422,6 +423,20 @@ export default function AdminDashboard() {
             />
             <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
               {guestTodayCount} guest{guestTodayCount === 1 ? '' : 's'} today
+            </Text>
+          </Card>
+        </Col>
+
+        <Col xs={12} md={8}>
+          <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
+            <Statistic
+              title="On Leave Today"
+              value={stats.leave}
+              prefix={<CalendarOutlined style={{ color: '#7c3aed' }} />}
+              valueStyle={{ color: '#7c3aed' }}
+            />
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
+              Approved leave recorded in attendance
             </Text>
           </Card>
         </Col>

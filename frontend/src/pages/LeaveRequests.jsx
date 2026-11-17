@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Button, Card, DatePicker, Descriptions, Empty, Form, Grid, Input,
   Modal, Popconfirm, Row, Col, Space, Statistic, Table, Tag, Typography, message,
+  Tooltip,
 } from 'antd';
 import {
   CalendarOutlined, CheckOutlined, ClockCircleOutlined, CloseOutlined,
   EyeOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import api from '../api/axios';
@@ -127,36 +129,45 @@ export default function LeaveRequests({ admin = false }) {
     rejected: rows.filter((row) => row.status === 'rejected').length,
   }), [rows]);
 
+  // ══════════════════════════════════════════════════════════
+  //  TABLE COLUMNS — intentionally lean.
+  //  Reason, admin note, and reviewer are ONLY shown in the modal.
+  // ══════════════════════════════════════════════════════════
   const columns = [
-    ...(admin ? [{
-      title: 'Employee',
-      key: 'employee',
-      render: (_, row) => (
-        <div>
-          <div style={{ fontWeight: 600 }}>{row.full_name}</div>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {row.employee_code}{row.department_name ? ` · ${row.department_name}` : ''}
-          </Text>
-        </div>
-      ),
-    }] : []),
+    ...(admin
+      ? [
+          {
+            title: 'Employee',
+            key: 'employee',
+            render: (_, row) => (
+              <div>
+                <div style={{ fontWeight: 600 }}>{row.full_name}</div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {row.employee_code}
+                  {row.department_name ? ` · ${row.department_name}` : ''}
+                </Text>
+              </div>
+            ),
+          },
+        ]
+      : []),
     {
       title: 'Dates requested',
       key: 'dates',
-      render: (_, row) => (
-        <div>
-          <div>{formatDate(row.start_date)} – {formatDate(row.end_date)}</div>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {dayjs(row.end_date).diff(dayjs(row.start_date), 'day') + 1} day(s)
-          </Text>
-        </div>
-      ),
-    },
-    {
-      title: admin ? 'Reason' : 'Reason for absence',
-      dataIndex: 'reason',
-      key: 'reason',
-      ellipsis: true,
+      render: (_, row) => {
+        const days =
+          dayjs(row.end_date).diff(dayjs(row.start_date), 'day') + 1;
+        return (
+          <div>
+            <div>
+              {formatDate(row.start_date)} – {formatDate(row.end_date)}
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {days} day{days === 1 ? '' : 's'}
+            </Text>
+          </div>
+        );
+      },
     },
     {
       title: 'Submitted',
@@ -169,14 +180,37 @@ export default function LeaveRequests({ admin = false }) {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
+      width: 130,
       render: (status) => (
         <Tag color={STATUS_COLORS[status]}>{status.toUpperCase()}</Tag>
       ),
     },
     {
+      // Compact hint that a reason is available — the text lives in the modal
+      title: 'Reason',
+      key: 'reason_hint',
+      width: 90,
+      align: 'center',
+      render: (_, row) =>
+        row.reason ? (
+          <Tooltip title="Open details to read the reason">
+            <Button
+              type="text"
+              size="small"
+              icon={<FileTextOutlined />}
+              onClick={() => openDetails(row)}
+              style={{ color: '#475569' }}
+            />
+          </Tooltip>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+        ),
+    },
+    {
       title: '',
       key: 'actions',
       align: 'right',
+      width: admin ? 180 : 150,
       render: (_, row) => (
         <Space size={4}>
           <Button
@@ -295,7 +329,9 @@ export default function LeaveRequests({ admin = false }) {
                 type={statusFilter === status ? 'primary' : 'default'}
                 onClick={() => setStatusFilter(status)}
               >
-                {status === 'all' ? 'All requests' : status[0].toUpperCase() + status.slice(1)}
+                {status === 'all'
+                  ? 'All requests'
+                  : status[0].toUpperCase() + status.slice(1)}
               </Button>
             ))}
           </Space>
@@ -313,13 +349,18 @@ export default function LeaveRequests({ admin = false }) {
           locale={{
             emptyText: (
               <Empty
-                description={admin ? 'No absence requests to show' : 'You have not submitted an absence request'}
+                description={
+                  admin
+                    ? 'No absence requests to show'
+                    : 'You have not submitted an absence request'
+                }
               />
             ),
           }}
         />
       </Card>
 
+      {/* ── Submit request modal (employee) ── */}
       <Modal
         open={requestOpen}
         title="Submit an absence request"
@@ -369,43 +410,54 @@ export default function LeaveRequests({ admin = false }) {
         </Form>
       </Modal>
 
+      {/* ── Detail / review modal (all fields, incl. reason) ── */}
       <Modal
         open={!!viewing}
         title={admin ? 'Review absence request' : 'Absence request details'}
         onCancel={() => setViewing(null)}
         footer={
-          admin && viewing?.status === 'pending'
-            ? [
-                <Button key="close" onClick={() => setViewing(null)}>Close</Button>,
-                <Popconfirm
-                  key="reject"
-                  title="Reject this absence request?"
-                  description="The employee will see this decision."
-                  onConfirm={() => decide('rejected')}
-                  okText="Reject request"
-                  cancelText="Go back"
-                >
-                  <Button danger loading={decisionBusy} icon={<CloseOutlined />}>
-                    Reject
-                  </Button>
-                </Popconfirm>,
-                <Button
-                  key="approve"
-                  type="primary"
-                  loading={decisionBusy}
-                  icon={<CheckOutlined />}
-                  onClick={() => decide('approved')}
-                >
-                  Approve
-                </Button>,
-              ]
-            : <Button onClick={() => setViewing(null)}>Close</Button>
+          admin && viewing?.status === 'pending' ? (
+            [
+              <Button key="close" onClick={() => setViewing(null)}>
+                Close
+              </Button>,
+              <Popconfirm
+                key="reject"
+                title="Reject this absence request?"
+                description="The employee will see this decision."
+                onConfirm={() => decide('rejected')}
+                okText="Reject request"
+                cancelText="Go back"
+              >
+                <Button danger loading={decisionBusy} icon={<CloseOutlined />}>
+                  Reject
+                </Button>
+              </Popconfirm>,
+              <Button
+                key="approve"
+                type="primary"
+                loading={decisionBusy}
+                icon={<CheckOutlined />}
+                onClick={() => decide('approved')}
+              >
+                Approve
+              </Button>,
+            ]
+          ) : (
+            <Button onClick={() => setViewing(null)}>Close</Button>
+          )
         }
         centered
         width={screens.lg ? 900 : 'calc(100vw - 24px)'}
       >
         {viewing && (
-          <div style={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', paddingRight: 4 }}>
+          <div
+            style={{
+              maxHeight: 'calc(100vh - 220px)',
+              overflowY: 'auto',
+              paddingRight: 4,
+            }}
+          >
             <Descriptions
               title="Request details"
               column={isMobile ? 1 : 2}
@@ -415,26 +467,52 @@ export default function LeaveRequests({ admin = false }) {
             >
               {admin && (
                 <>
-                  <Descriptions.Item label="Employee">{viewing.full_name}</Descriptions.Item>
-                  <Descriptions.Item label="Staff ID">{viewing.employee_code}</Descriptions.Item>
-                  <Descriptions.Item label="Department">{viewing.department_name || '—'}</Descriptions.Item>
-                  <Descriptions.Item label="Email">{viewing.email || '—'}</Descriptions.Item>
+                  <Descriptions.Item label="Employee">
+                    {viewing.full_name}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Staff ID">
+                    {viewing.employee_code}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Department">
+                    {viewing.department_name || '—'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Email">
+                    {viewing.email || '—'}
+                  </Descriptions.Item>
                 </>
               )}
               <Descriptions.Item label="Date range">
                 {formatDate(viewing.start_date)} – {formatDate(viewing.end_date)}
               </Descriptions.Item>
               <Descriptions.Item label="Duration">
-                {dayjs(viewing.end_date).diff(dayjs(viewing.start_date), 'day') + 1} day(s)
+                {dayjs(viewing.end_date).diff(dayjs(viewing.start_date), 'day') + 1}{' '}
+                day(s)
               </Descriptions.Item>
               <Descriptions.Item label="Submitted">
                 {formatDateTime(viewing.created_at)}
               </Descriptions.Item>
               <Descriptions.Item label="Status">
-                <Tag color={STATUS_COLORS[viewing.status]}>{viewing.status.toUpperCase()}</Tag>
+                <Tag color={STATUS_COLORS[viewing.status]}>
+                  {viewing.status.toUpperCase()}
+                </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="Reason" span={isMobile ? 1 : 2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{viewing.reason}</div>
+                {viewing.reason ? (
+                  <div
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      padding: '10px 12px',
+                      background: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 8,
+                      color: '#0f172a',
+                    }}
+                  >
+                    {viewing.reason}
+                  </div>
+                ) : (
+                  <Text type="secondary">No reason provided</Text>
+                )}
               </Descriptions.Item>
               {viewing.decided_at && (
                 <>
@@ -452,8 +530,13 @@ export default function LeaveRequests({ admin = false }) {
                 </Descriptions.Item>
               )}
             </Descriptions>
+
             {admin && viewing.status === 'pending' && (
-              <Form form={decisionForm} layout="vertical" style={{ marginTop: 16 }}>
+              <Form
+                form={decisionForm}
+                layout="vertical"
+                style={{ marginTop: 16 }}
+              >
                 <Form.Item
                   label="Note to employee (optional)"
                   name="admin_note"

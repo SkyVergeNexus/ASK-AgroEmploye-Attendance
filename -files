@@ -1,0 +1,9 @@
+[33mcommit 5b98acc8ad59b46883c1e45be274fa00125049fc[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: SkyVergeNexus <skyvergenet@outlook.com>
+Date:   Tue Nov 17 21:25:38 2026 +0000
+
+    vhange
+
+ backend/routes/attendance.js    | 10 [32m++++++++[m[31m--[m
+ backend/routes/leaveRequests.js |  2 [32m+[m[31m-[m
+ 2 files changed, 9 insertions(+), 3 deletions(-)

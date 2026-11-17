@@ -43,13 +43,6 @@ const statusOptions = [
   { value: 'leave', label: 'Leave' },
 ];
 
-const STAT_META = [
-  { key: 'total',   label: 'Records', color: '#1677ff', icon: <CalendarOutlined /> },
-  { key: 'present', label: 'Present', color: '#16a34a', icon: <CheckCircleOutlined /> },
-  { key: 'late',    label: 'Late',    color: '#d97706', icon: <ClockCircleOutlined /> },
-  { key: 'absent',  label: 'Absent',  color: '#dc2626', icon: <CloseCircleOutlined /> },
-];
-
 const QUICK_OPTIONS = [
   { value: 'today', label: 'Today' },
   { value: 'week', label: 'Week' },
@@ -129,7 +122,8 @@ export default function AttendanceHistory() {
     const present = filtered.filter((r) => r.status === 'present').length;
     const late = filtered.filter((r) => r.status === 'late').length;
     const absent = filtered.filter((r) => r.status === 'absent').length;
-    return { total, present, late, absent };
+    const leave = filtered.filter((r) => r.status === 'leave').length;
+    return { total, present, late, absent, leave };
   }, [filtered]);
 
   // 5 core columns only — everything else moves to the detail modal
@@ -176,7 +170,11 @@ export default function AttendanceHistory() {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      render: (v) => <Tag color={statusColor[v] || 'default'}>{v}</Tag>,
+      render: (v) => (
+        <Tag color={statusColor[v] || 'default'}>
+          {STATUS_META[v]?.label || v}
+        </Tag>
+      ),
     },
     {
       title: '',
@@ -199,7 +197,9 @@ export default function AttendanceHistory() {
 
   // ── Mobile compact card — 5 fields + View button ──
   const renderMobileCard = (r) => {
-    const meta = STATUS_META[r.status] || { accent: '#94a3b8', bg: '#f8fafc', text: '#475569' };
+    const meta = STATUS_META[r.status] || {
+      accent: '#94a3b8', bg: '#f8fafc', text: '#475569', label: r.status,
+    };
     const isRemote = r.clock_in_mode === 'remote';
 
     return (
@@ -234,8 +234,9 @@ export default function AttendanceHistory() {
                 {String(r.attendance_date).slice(0, 10)}
               </div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                {isRemote ? 'Remote · ' : 'On-site · '}
-                {r.early_leave_reason ? 'Left early' : 'Full day'}
+                {r.status === 'leave'
+                  ? 'Approved leave'
+                  : `${isRemote ? 'Remote' : 'On-site'} · ${r.early_leave_reason ? 'Left early' : 'Full day'}`}
               </div>
             </div>
           </div>
@@ -243,7 +244,7 @@ export default function AttendanceHistory() {
             color={statusColor[r.status] || 'default'}
             style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize', flexShrink: 0, fontWeight: 600, fontSize: 11 }}
           >
-            {r.status}
+            {meta.label}
           </Tag>
         </div>
 
@@ -333,14 +334,16 @@ export default function AttendanceHistory() {
             }}
           >
             <Space size={10} align="center">
-              {isRemote ? (
+              {r.status === 'leave' ? (
+                <CalendarOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
+              ) : isRemote ? (
                 <HomeOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
               ) : (
                 <WifiOutlined style={{ fontSize: 20, color: '#1677ff' }} />
               )}
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
-                  {isRemote ? 'Remote work day' : 'On-site work day'}
+                  {r.status === 'leave' ? 'Approved leave' : isRemote ? 'Remote work day' : 'On-site work day'}
                 </div>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {String(r.attendance_date).slice(0, 10)}
@@ -370,10 +373,15 @@ export default function AttendanceHistory() {
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Mode">
-              <Tag color={isRemote ? 'purple' : 'blue'}>
-                {isRemote ? 'Remote' : 'On-site'}
+              <Tag color={r.status === 'leave' || isRemote ? 'purple' : 'blue'}>
+                {r.status === 'leave' ? 'Leave' : isRemote ? 'Remote' : 'On-site'}
               </Tag>
             </Descriptions.Item>
+            {r.status === 'leave' && (
+              <Descriptions.Item label="Attendance note" span={2}>
+                {r.notes || 'Approved leave'}
+              </Descriptions.Item>
+            )}
           </Descriptions>
 
           {/* Remote-specific block */}
@@ -670,24 +678,29 @@ export default function AttendanceHistory() {
       </Card>
 
       <Row gutter={[16, 16]} className="mb-4">
-        <Col xs={12} md={6}>
+        <Col xs={12} md={4}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Records" value={stats.total} prefix={<CalendarOutlined style={{ color: '#1677ff' }} />} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={4}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Present" value={stats.present} prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a' }} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={4}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Late" value={stats.late} prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />} valueStyle={{ color: '#d97706' }} />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={4}>
           <Card bordered={false} className="shadow-sm">
             <Statistic title="Absent" value={stats.absent} prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />} valueStyle={{ color: '#dc2626' }} />
+          </Card>
+        </Col>
+        <Col xs={12} md={4}>
+          <Card bordered={false} className="shadow-sm">
+            <Statistic title="Leave" value={stats.leave} prefix={<CalendarOutlined style={{ color: '#7c3aed' }} />} valueStyle={{ color: '#7c3aed' }} />
           </Card>
         </Col>
       </Row>
