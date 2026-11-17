@@ -8,8 +8,22 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const saved = localStorage.getItem('user');
-    if (saved) { try { setUser(JSON.parse(saved)); } catch (e) {} }
+    if (saved) {
+      try {
+        setUser(JSON.parse(saved));
+      } catch (error) {
+        console.error('Unable to restore the saved user session:', error);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+    }
     setReady(true);
+  }, []);
+
+  useEffect(() => {
+    const handleInvalidToken = () => setUser(null);
+    window.addEventListener('auth:invalid-token', handleInvalidToken);
+    return () => window.removeEventListener('auth:invalid-token', handleInvalidToken);
   }, []);
 
   const login = (token, userData) => {

@@ -55,7 +55,7 @@ export default function LeaveRequests({ admin = false }) {
     } finally {
       setLoading(false);
     }
-  }, [admin, statusFilter]);
+  }, [admin]);
 
   useEffect(() => {
     load();

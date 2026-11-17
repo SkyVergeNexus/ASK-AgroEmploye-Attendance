@@ -17,6 +17,16 @@ function employeeOnly(req, res, next) {
   next();
 }
 
+function reportError(res, err, context, message) {
+  console.error(`[leave-requests] ${context}:`, err.message);
+  if (err.code === 'ER_NO_SUCH_TABLE') {
+    return res.status(503).json({
+      message: 'Absence request storage is not initialized. Run npm run db:migrate on the backend, then restart it.',
+    });
+  }
+  return res.status(500).json({ message });
+}
+
 router.post('/', verifyToken, employeeOnly, async (req, res) => {
   const { start_date, end_date, reason } = req.body || {};
   const reasonText = typeof reason === 'string' ? reason.trim() : '';
@@ -74,8 +84,7 @@ router.post('/', verifyToken, employeeOnly, async (req, res) => {
       request_id: result.insertId,
     });
   } catch (err) {
-    console.error('[leave-requests] create:', err.message);
-    res.status(500).json({ message: 'Failed to submit absence request' });
+    reportError(res, err, 'create', 'Failed to submit absence request');
   }
 });
 
@@ -95,8 +104,7 @@ router.get('/mine', verifyToken, employeeOnly, async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
-    console.error('[leave-requests] mine:', err.message);
-    res.status(500).json({ message: 'Failed to load your absence requests' });
+    reportError(res, err, 'mine', 'Failed to load your absence requests');
   }
 });
 
@@ -115,8 +123,7 @@ router.delete('/:id', verifyToken, employeeOnly, async (req, res) => {
     }
     res.json({ message: 'Request cancelled' });
   } catch (err) {
-    console.error('[leave-requests] cancel:', err.message);
-    res.status(500).json({ message: 'Failed to cancel request' });
+    reportError(res, err, 'cancel', 'Failed to cancel request');
   }
 });
 
@@ -140,8 +147,7 @@ router.get('/admin', verifyToken, isAdmin, async (req, res) => {
     const [rows] = await pool.query(sql);
     res.json(rows);
   } catch (err) {
-    console.error('[leave-requests] admin list:', err.message);
-    res.status(500).json({ message: 'Failed to load absence requests' });
+    reportError(res, err, 'admin list', 'Failed to load absence requests');
   }
 });
 
@@ -245,8 +251,7 @@ router.put('/:id/decision', verifyToken, isAdmin, async (req, res) => {
     });
   } catch (err) {
     if (connection) await connection.rollback();
-    console.error('[leave-requests] decision:', err.message);
-    res.status(500).json({ message: 'Failed to process absence request' });
+    reportError(res, err, 'decision', 'Failed to process absence request');
   } finally {
     if (connection) connection.release();
   }
