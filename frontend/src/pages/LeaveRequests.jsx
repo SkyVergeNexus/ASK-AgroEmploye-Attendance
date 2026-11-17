@@ -2,12 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Button, Card, DatePicker, Descriptions, Empty, Form, Grid, Input,
   Modal, Popconfirm, Row, Col, Space, Statistic, Table, Tag, Typography, message,
-  Tooltip,
 } from 'antd';
 import {
   CalendarOutlined, CheckOutlined, ClockCircleOutlined, CloseOutlined,
   EyeOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined,
-  FileTextOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import api from '../api/axios';
@@ -130,8 +128,7 @@ export default function LeaveRequests({ admin = false }) {
   }), [rows]);
 
   // ══════════════════════════════════════════════════════════
-  //  TABLE COLUMNS — intentionally lean.
-  //  Reason, admin note, and reviewer are ONLY shown in the modal.
+  //  TABLE COLUMNS — no reason column, no horizontal scroll.
   // ══════════════════════════════════════════════════════════
   const columns = [
     ...(admin
@@ -184,27 +181,6 @@ export default function LeaveRequests({ admin = false }) {
       render: (status) => (
         <Tag color={STATUS_COLORS[status]}>{status.toUpperCase()}</Tag>
       ),
-    },
-    {
-      // Compact hint that a reason is available — the text lives in the modal
-      title: 'Reason',
-      key: 'reason_hint',
-      width: 90,
-      align: 'center',
-      render: (_, row) =>
-        row.reason ? (
-          <Tooltip title="Open details to read the reason">
-            <Button
-              type="text"
-              size="small"
-              icon={<FileTextOutlined />}
-              onClick={() => openDetails(row)}
-              style={{ color: '#475569' }}
-            />
-          </Tooltip>
-        ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
-        ),
     },
     {
       title: '',
@@ -345,7 +321,6 @@ export default function LeaveRequests({ admin = false }) {
           dataSource={visibleRows}
           loading={loading}
           pagination={{ pageSize: 10, showSizeChanger: true }}
-          scroll={{ x: 'max-content' }}
           locale={{
             emptyText: (
               <Empty
@@ -410,7 +385,7 @@ export default function LeaveRequests({ admin = false }) {
         </Form>
       </Modal>
 
-      {/* ── Detail / review modal (all fields, incl. reason) ── */}
+      {/* ── Detail / review modal (reason lives here) ── */}
       <Modal
         open={!!viewing}
         title={admin ? 'Review absence request' : 'Absence request details'}
