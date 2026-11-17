@@ -887,7 +887,12 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
       'SELECT COUNT(*) total FROM employees WHERE is_active = 1'
     );
     const [[{ present }]] = await pool.query(
-      'SELECT COUNT(*) present FROM attendance WHERE attendance_date = ?',
+      `SELECT COUNT(*) present FROM attendance
+       WHERE attendance_date = ? AND status IN ('present', 'late', 'half-day')`,
+      [today]
+    );
+    const [[{ leave }]] = await pool.query(
+      "SELECT COUNT(*) leave FROM attendance WHERE attendance_date = ? AND status = 'leave'",
       [today]
     );
     const [[{ late }]] = await pool.query(
@@ -902,7 +907,8 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
       total,
       present,
       late,
-      absent: Math.max(0, total - present),
+      leave,
+      absent: Math.max(0, total - present - leave),
       pending_early_leaves: pending_early,
     });
   } catch (err) {

@@ -228,7 +228,7 @@ router.put('/:id/decision', verifyToken, isAdmin, async (req, res) => {
           [
             request.employee_id,
             leave_date,
-            `Approved absence request #${request.id}`,
+              `Approved leave (request #${request.id})`,
           ]
         );
       }
