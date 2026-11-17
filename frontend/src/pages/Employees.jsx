@@ -549,7 +549,7 @@ export default function Employees() {
         onCancel={closeView}
         footer={viewFooter()}
         centered
-        width={620}
+        width={screens.lg ? 900 : 'calc(100vw - 24px)'}
         destroyOnClose
         title={
           viewing && (
@@ -585,10 +585,15 @@ export default function Employees() {
         }
       >
         {viewing && (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div style={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', paddingRight: 4 }}>
             {/* Identity / contact block */}
             <Card size="small" variant="borderless" style={{ background: '#f8fafc' }}>
-              <Descriptions column={1} size="small" colon={false} labelStyle={{ width: 130 }}>
+              <Descriptions
+                column={isMobile ? 1 : 2}
+                size="small"
+                colon={false}
+                labelStyle={{ width: 130 }}
+              >
                 <Descriptions.Item
                   label={<><MailOutlined /> Email</>}
                 >
@@ -631,7 +636,7 @@ export default function Employees() {
                   )}
                 </Descriptions.Item>
                 {viewing.created_at && (
-                  <Descriptions.Item label="Joined">
+                  <Descriptions.Item label="Joined" span={isMobile ? 1 : 2}>
                     {dayjs(viewing.created_at).format('YYYY-MM-DD HH:mm')}
                   </Descriptions.Item>
                 )}
@@ -644,7 +649,7 @@ export default function Employees() {
             <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
               Use the actions below to approve/revoke or delete this employee.
             </div>
-          </Space>
+          </div>
         )}
       </Modal>
     </div>
