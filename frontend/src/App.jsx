@@ -19,6 +19,7 @@ import EarlyLeaveRequests from './pages/EarlyLeaveRequests';
 import GuestRegister from './pages/GuestRegister';
 import Guests from './pages/Guests';
 import Services from './pages/Services';
+import LeaveRequests from './pages/LeaveRequests';
 
 function AppLayout() {
   const { user } = useAuth();
@@ -75,9 +76,11 @@ function Shell() {
       <Route element={user ? <AppLayout /> : <Navigate to="/login" replace />}>
         <Route path="/dashboard" element={<EmployeeRoute><Dashboard /></EmployeeRoute>} />
         <Route path="/attendance" element={<EmployeeRoute><AttendanceHistory /></EmployeeRoute>} />
+        <Route path="/leave-requests" element={<EmployeeRoute><LeaveRequests /></EmployeeRoute>} />
         <Route path="/profile" element={<Protected><Profile /></Protected>} />
         <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
         <Route path="/early-leave" element={<AdminRoute><EarlyLeaveRequests /></AdminRoute>} />
+        <Route path="/leave-requests/admin" element={<AdminRoute><LeaveRequests admin /></AdminRoute>} />
         <Route path="/employees" element={<AdminRoute><Employees /></AdminRoute>} />
         <Route path="/services" element={<AdminRoute><Services /></AdminRoute>} />
         <Route path="/guests" element={<AdminRoute><Guests /></AdminRoute>} />

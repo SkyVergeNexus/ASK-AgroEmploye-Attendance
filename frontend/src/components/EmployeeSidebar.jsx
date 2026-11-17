@@ -15,6 +15,7 @@ export default function EmployeeSidebar({ open, onClose }) {
       </p>
       <NavLink to="/dashboard" className={linkClass} end>Clock In / Out</NavLink>
       <NavLink to="/attendance" className={linkClass}>Attendance History</NavLink>
+      <NavLink to="/leave-requests" className={linkClass}>Absence Requests</NavLink>
 
       <p className="px-4 pt-4 pb-2 text-xs uppercase tracking-wider text-green-400">
         Account

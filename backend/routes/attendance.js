@@ -205,11 +205,14 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 
   try {
     const [existing] = await pool.query(
-      'SELECT id FROM attendance WHERE employee_id = ? AND attendance_date = ?',
+      'SELECT id, status FROM attendance WHERE employee_id = ? AND attendance_date = ?',
       [req.user.id, today]
     );
     if (existing.length) {
       await removeUploadedSelfie();
+      if (existing[0].status === 'leave') {
+        return res.status(403).json({ message: 'You have approved leave for today' });
+      }
       return res.status(400).json({ message: 'Already clocked in today' });
     }
 
