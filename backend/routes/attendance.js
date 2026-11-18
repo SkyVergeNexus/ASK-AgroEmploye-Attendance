@@ -895,8 +895,8 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
        WHERE attendance_date = ? AND status IN ('present', 'late', 'half-day')`,
       [today]
     );
-    const [[{ leave }]] = await pool.query(
-      "SELECT COUNT(*) leave FROM attendance WHERE attendance_date = ? AND status = 'leave'",
+    const [[{ leave_count: leave }]] = await pool.query(
+      "SELECT COUNT(*) AS leave_count FROM attendance WHERE attendance_date = ? AND status = 'leave'",
       [today]
     );
     const [[{ late }]] = await pool.query(
