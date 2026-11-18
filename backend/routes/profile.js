@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { verifyToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { persistUpload } = require('../helpers/imageStorage');
 const router = express.Router();
 
 router.get('/', verifyToken, async (req, res) => {
@@ -25,9 +26,18 @@ router.put('/', verifyToken, async (req, res) => {
 
 router.post('/picture', verifyToken, upload.single('picture'), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-  const url = '/uploads/' + req.file.filename;
-  await pool.query('UPDATE employees SET profile_picture=? WHERE id=?', [url, req.user.id]);
-  res.json({ message: 'Picture uploaded', profile_picture: url });
+  try {
+    const url = await persistUpload(req.file);
+    await pool.query('UPDATE employees SET profile_picture=? WHERE id=?', [url, req.user.id]);
+    res.json({ message: 'Picture uploaded', profile_picture: url });
+  } catch (err) {
+    console.error('[profile] picture upload failed:', err.message);
+    res.status(err.code === 'IMAGE_STORAGE_NOT_CONFIGURED' ? 503 : 500).json({
+      message: err.code === 'IMAGE_STORAGE_NOT_CONFIGURED'
+        ? err.message
+        : 'Failed to upload profile picture',
+    });
+  }
 });
 
 router.put('/password', verifyToken, async (req, res) => {

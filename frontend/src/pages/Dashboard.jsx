@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
-import { API_ORIGIN } from '../config';
+import { assetUrl } from '../config';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -515,9 +515,7 @@ export default function Dashboard() {
     (!networkIsEnforced || ipAllowed);
   const canClockOut = today && !today.clock_out && !pendingEarly;
 
-  const picUrl = user?.profile_picture
-    ? API_ORIGIN + user.profile_picture
-    : null;
+  const picUrl = assetUrl(user?.profile_picture);
 
   const recentHistory = useMemo(() => {
     return [...history]

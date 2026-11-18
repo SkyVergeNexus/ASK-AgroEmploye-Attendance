@@ -13,7 +13,7 @@ import {
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import api from '../api/axios';
-import { API_ORIGIN } from '../config';
+import { assetUrl } from '../config';
 
 dayjs.extend(isoWeek);
 
@@ -279,7 +279,7 @@ export default function Reports() {
             r.remote_location || '',
             r.clock_in_lat ?? '',
             r.clock_in_lng ?? '',
-            r.remote_selfie ? API_ORIGIN + r.remote_selfie : '',
+            assetUrl(r.remote_selfie) || '',
             r.tasks_completed || '',
           ].map(csvCell).join(',')
         )
@@ -584,7 +584,7 @@ export default function Reports() {
                 <Descriptions.Item label={<><CameraOutlined /> Selfie</>}>
                   {r.remote_selfie ? (
                     <Image
-                      src={API_ORIGIN + r.remote_selfie}
+                      src={assetUrl(r.remote_selfie)}
                       alt={`${r.full_name || 'Employee'} remote selfie`}
                       width={160}
                       style={{ borderRadius: 8, border: '1px solid #e2e8f0' }}

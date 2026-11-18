@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
-import { API_ORIGIN } from '../config';
+import { assetUrl } from '../config';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -133,7 +133,7 @@ export default function Profile() {
   };
 
   const picUrl = useMemo(
-    () => (profile?.profile_picture ? API_ORIGIN + profile.profile_picture : null),
+    () => assetUrl(profile?.profile_picture),
     [profile?.profile_picture]
   );
 

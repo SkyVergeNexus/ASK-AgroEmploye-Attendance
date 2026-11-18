@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import api from '../api/axios';
-import { API_ORIGIN } from '../config';
+import { assetUrl } from '../config';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -164,11 +164,7 @@ export default function Employees() {
       render: (text, row) => (
         <Space>
           <Avatar
-            src={
-              row.profile_picture
-                ? API_ORIGIN + row.profile_picture
-                : null
-            }
+            src={assetUrl(row.profile_picture)}
             icon={!row.profile_picture ? <UserOutlined /> : null}
             style={{
               backgroundColor: row.profile_picture ? undefined : '#065f46',
@@ -229,11 +225,7 @@ export default function Employees() {
       title={
         <Space>
           <Avatar
-            src={
-              row.profile_picture
-                ? API_ORIGIN + row.profile_picture
-                : null
-            }
+            src={assetUrl(row.profile_picture)}
             icon={!row.profile_picture ? <UserOutlined /> : null}
             style={{
               backgroundColor: row.profile_picture ? undefined : '#065f46',
@@ -556,11 +548,7 @@ export default function Employees() {
             <Space>
               <Avatar
                 size={40}
-                src={
-                  viewing.profile_picture
-                    ? API_ORIGIN + viewing.profile_picture
-                    : null
-                }
+                src={assetUrl(viewing.profile_picture)}
                 icon={!viewing.profile_picture ? <UserOutlined /> : null}
                 style={{
                   backgroundColor: viewing.profile_picture ? undefined : '#065f46',

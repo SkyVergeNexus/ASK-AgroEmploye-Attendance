@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import api from '../api/axios';
-import { API_ORIGIN } from '../config';
+import { assetUrl } from '../config';
 import toast from 'react-hot-toast';
 
 const { Title, Text } = Typography;
@@ -307,7 +307,7 @@ export default function Settings() {
                   borderRadius: 8,
                   border: '1px dashed #cbd5e1',
                   backgroundImage: coverUrl
-                    ? `url("${API_ORIGIN}${coverUrl}")`
+                    ? `url("${assetUrl(coverUrl)}")`
                     : 'linear-gradient(135deg, #065f46 0%, #047857 50%, #065f46 100%)',
                   backgroundSize: 'cover',
                   backgroundPosition: 'center',

@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import api from '../api/axios';
-import { API_ORIGIN } from '../config';
+import { assetUrl } from '../config';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -384,7 +384,7 @@ export default function Guests() {
               {r.assigned_employee_id ? (
                 <Space>
                   <Avatar
-                    src={r.assigned_employee_picture ? API_ORIGIN + r.assigned_employee_picture : undefined}
+                    src={assetUrl(r.assigned_employee_picture) || undefined}
                     icon={<UserOutlined />}
                   />
                   <Text strong>{r.assigned_employee_name || `#${r.assigned_employee_id}`}</Text>

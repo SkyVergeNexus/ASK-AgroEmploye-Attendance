@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const upload = require('../middleware/upload');
+const { persistUpload, removeTemporaryUpload } = require('../helpers/imageStorage');
 const router = express.Router();
 
 // ============ REGISTER ============
@@ -25,6 +26,7 @@ router.post('/register', upload.single('picture'), async (req, res) => {
     department_id,
     role_id,
   } = req.body;
+  let imagePersisted = false;
 
   try {
     // --- required fields ---
@@ -85,7 +87,8 @@ router.post('/register', upload.single('picture'), async (req, res) => {
     // --- hash + save ---
     console.log('[register] hashing password...');
     const hash = await bcrypt.hash(password, 10);
-    const picturePath = req.file ? '/uploads/' + req.file.filename : null;
+    const picturePath = req.file ? await persistUpload(req.file) : null;
+    imagePersisted = Boolean(req.file);
 
     console.log('[register] inserting into employees table...');
     const [result] = await pool.query(
@@ -110,6 +113,10 @@ router.post('/register', upload.single('picture'), async (req, res) => {
       message: 'Registration submitted. Awaiting admin approval.',
     });
   } catch (err) {
+    if (err.code === 'IMAGE_STORAGE_NOT_CONFIGURED') {
+      return res.status(503).json({ message: err.message });
+    }
+
     // --- MySQL duplicate key errors (fallback) ---
     if (err.code === 'ER_DUP_ENTRY') {
       console.log('[register] MYSQL DUPLICATE KEY:', err.message);
@@ -136,6 +143,10 @@ router.post('/register', upload.single('picture'), async (req, res) => {
     console.error('==========================================');
 
     res.status(500).json({ message: 'Registration failed' });
+  } finally {
+    if (req.file && !imagePersisted) {
+      await removeTemporaryUpload(req.file);
+    }
   }
 });
 

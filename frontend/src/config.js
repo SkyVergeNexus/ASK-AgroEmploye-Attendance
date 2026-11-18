@@ -12,5 +12,12 @@ export const API_BASE = explicitBase
 
 export const API_ORIGIN = API_BASE.replace(/\/api$/, '');
 
+export function assetUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const url = value.trim();
+  if (/^(https?:)?\/\//i.test(url) || /^(data:image\/|blob:)/i.test(url)) return url;
+  return new URL(url, `${API_ORIGIN}/`).href;
+}
+
 // Alias for existing imports
 export const API_BASE_URL = API_BASE;

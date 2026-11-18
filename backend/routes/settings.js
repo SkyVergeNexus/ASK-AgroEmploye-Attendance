@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
+const { persistUpload } = require('../helpers/imageStorage');
 const router = express.Router();
 
 const multer = require('multer');
@@ -182,12 +183,17 @@ router.post(
   coverUpload.single('cover'),
   async (req, res) => {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-    const url = '/uploads/' + req.file.filename;
     try {
+      const url = await persistUpload(req.file);
       await pool.query('UPDATE settings SET login_cover_url = ? WHERE id = 1', [url]);
       res.json({ message: 'Cover updated', login_cover_url: url });
     } catch (err) {
-      res.status(500).json({ message: err.message });
+      console.error('[settings] cover upload failed:', err.message);
+      res.status(err.code === 'IMAGE_STORAGE_NOT_CONFIGURED' ? 503 : 500).json({
+        message: err.code === 'IMAGE_STORAGE_NOT_CONFIGURED'
+          ? err.message
+          : 'Failed to upload cover image',
+      });
     }
   }
 );

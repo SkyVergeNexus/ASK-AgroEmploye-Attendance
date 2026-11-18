@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
-import { API_ORIGIN } from '../config';
+import { API_ORIGIN, assetUrl } from '../config';
 
 const { Title, Text } = Typography;
 
@@ -38,7 +38,7 @@ export default function Login() {
 
   const backgroundStyle = coverUrl
     ? {
-        backgroundImage: `url("${API_ORIGIN}${coverUrl}")`,
+        backgroundImage: `url("${assetUrl(coverUrl)}")`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundRepeat: 'no-repeat',

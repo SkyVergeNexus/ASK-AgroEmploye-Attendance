@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { persistUpload } = require('../helpers/imageStorage');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
@@ -285,7 +286,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       }
 
       remoteLocation = location;
-      remoteSelfie = '/uploads/' + req.file.filename;
+      remoteSelfie = await persistUpload(req.file);
       method = 'remote';
       verified = 1;
     } else if (enforceLoc || enforceNet) {
@@ -371,6 +372,9 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     });
   } catch (err) {
     await removeUploadedSelfie();
+    if (err.code === 'IMAGE_STORAGE_NOT_CONFIGURED') {
+      return res.status(503).json({ message: err.message });
+    }
     serverError(res, err, 'clock-in');
   }
 });

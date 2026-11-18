@@ -10,7 +10,7 @@ import {
   ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
-import { API_ORIGIN } from '../config';
+import { API_ORIGIN, assetUrl } from '../config';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -129,7 +129,7 @@ export default function Register() {
 
   const backgroundStyle = coverUrl
     ? {
-        backgroundImage: `url("${API_ORIGIN}${coverUrl}")`,
+        backgroundImage: `url("${assetUrl(coverUrl)}")`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundRepeat: 'no-repeat',

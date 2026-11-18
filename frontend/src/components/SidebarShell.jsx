@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { API_ORIGIN } from '../config';
+import { assetUrl } from '../config';
 import toast from 'react-hot-toast';
 
 export default function SidebarShell({ open, onClose, sectionLabel, children }) {
@@ -36,9 +36,7 @@ export default function SidebarShell({ open, onClose, sectionLabel, children }) 
     nav('/login');
   };
 
-  const pic = user?.profile_picture
-    ? API_ORIGIN + user.profile_picture
-    : null;
+  const pic = assetUrl(user?.profile_picture);
 
   return (
     <>
