@@ -657,12 +657,17 @@ export default function AdminDashboard() {
             </Link>
           </Card>
 
-          {/* Quick Actions — Services Catalog & Guests / Visitors removed */}
+          {/* Quick Actions */}
           <Card title="Quick Actions" bordered={false} className="shadow-sm">
             <Space direction="vertical" style={{ width: '100%' }} size="small">
               <Link to="/employees">
                 <Button block icon={<UserAddOutlined />}>
                   Manage Employees
+                </Button>
+              </Link>
+              <Link to="/leave-requests/admin">
+                <Button block icon={<CalendarOutlined />}>
+                  Leave Requests
                 </Button>
               </Link>
               <Link to="/early-leave">
