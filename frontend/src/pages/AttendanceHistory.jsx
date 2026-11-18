@@ -4,8 +4,7 @@ import {
   Select, Button, Grid, Empty, message, Badge, Image, Modal, Descriptions, Divider,
 } from 'antd';
 import {
-  ReloadOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  CloseCircleOutlined, CalendarOutlined, EyeOutlined, EnvironmentOutlined,
+  ReloadOutlined, ClockCircleOutlined, CalendarOutlined, EyeOutlined, EnvironmentOutlined,
   CameraOutlined, FileTextOutlined, HomeOutlined, WifiOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -117,14 +116,10 @@ export default function AttendanceHistory() {
     return rows.filter((r) => statusFilter.includes(r.status));
   }, [rows, statusFilter]);
 
-  const stats = useMemo(() => {
-    const total = filtered.length;
-    const present = filtered.filter((r) => r.status === 'present').length;
-    const late = filtered.filter((r) => r.status === 'late').length;
-    const absent = filtered.filter((r) => r.status === 'absent').length;
-    const leave = filtered.filter((r) => r.status === 'leave').length;
-    return { total, present, late, absent, leave };
-  }, [filtered]);
+  const showSummary = quickRange !== 'month' || statusFilter.length > 0;
+  const summaryTitle = statusFilter.length === 1
+    ? STATUS_META[statusFilter[0]]?.label || statusFilter[0]
+    : 'Matching records';
 
   // 5 core columns only — everything else moves to the detail modal
   const columns = [
@@ -595,6 +590,19 @@ export default function AttendanceHistory() {
           </div>
         </Card>
 
+        {showSummary && (
+          <Card
+            bordered={false}
+            style={{ marginBottom: 14, borderRadius: 14, boxShadow: '0 4px 14px rgba(15,23,42,0.06)' }}
+          >
+            <Statistic
+              title={summaryTitle}
+              value={filtered.length}
+              prefix={<CalendarOutlined style={{ color: '#1677ff' }} />}
+            />
+          </Card>
+        )}
+
         <div style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 32 }}>
@@ -677,33 +685,19 @@ export default function AttendanceHistory() {
         </Space>
       </Card>
 
-      <Row gutter={[16, 16]} className="mb-4">
-        <Col xs={12} md={4}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Records" value={stats.total} prefix={<CalendarOutlined style={{ color: '#1677ff' }} />} />
-          </Card>
-        </Col>
-        <Col xs={12} md={4}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Present" value={stats.present} prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a' }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={4}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Late" value={stats.late} prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />} valueStyle={{ color: '#d97706' }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={4}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Absent" value={stats.absent} prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />} valueStyle={{ color: '#dc2626' }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={4}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Leave" value={stats.leave} prefix={<CalendarOutlined style={{ color: '#7c3aed' }} />} valueStyle={{ color: '#7c3aed' }} />
-          </Card>
-        </Col>
-      </Row>
+      {showSummary && (
+        <Row gutter={[16, 16]} className="mb-4">
+          <Col xs={24} sm={12} md={8} lg={6}>
+            <Card bordered={false} className="shadow-sm">
+              <Statistic
+                title={summaryTitle}
+                value={filtered.length}
+                prefix={<CalendarOutlined style={{ color: '#1677ff' }} />}
+              />
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       <Card
         bordered={false}

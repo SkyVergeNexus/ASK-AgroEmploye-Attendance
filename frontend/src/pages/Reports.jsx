@@ -6,7 +6,7 @@ import {
 } from 'antd';
 import {
   FileExcelOutlined, ReloadOutlined, SearchOutlined, FilterOutlined,
-  CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, TeamOutlined, CalendarOutlined,
+  TeamOutlined, CalendarOutlined,
   EyeOutlined, EnvironmentOutlined, CameraOutlined, FileTextOutlined,
   HomeOutlined, WifiOutlined,
 } from '@ant-design/icons';
@@ -236,14 +236,16 @@ export default function Reports() {
     genderFilter,
   ]);
 
-  const stats = useMemo(() => {
-    const total = filteredRows.length;
-    const present = filteredRows.filter((r) => r.status === 'present').length;
-    const late = filteredRows.filter((r) => r.status === 'late').length;
-    const absent = filteredRows.filter((r) => r.status === 'absent').length;
-    const leave = filteredRows.filter((r) => r.status === 'leave').length;
-    return { total, present, late, absent, leave };
-  }, [filteredRows]);
+  const showSummary =
+    quickRange !== 'year' ||
+    Boolean(search.trim()) ||
+    statusFilter.length > 0 ||
+    employeeFilter.length > 0 ||
+    departmentFilter.length > 0 ||
+    genderFilter.length > 0;
+  const summaryTitle = statusFilter.length === 1
+    ? statusOptions.find((option) => option.value === statusFilter[0])?.label || statusFilter[0]
+    : 'Matching records';
 
   const clearFilters = () => {
     setSearch('');
@@ -785,34 +787,19 @@ export default function Reports() {
         </Row>
       </Card>
 
-      {/* Stats */}
-      <Row gutter={[16, 16]} className="mb-4">
-        <Col xs={12} md={8}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Records" value={stats.total} prefix={<TeamOutlined style={{ color: '#1677ff' }} />} />
-          </Card>
-        </Col>
-        <Col xs={12} md={8}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Present" value={stats.present} prefix={<CheckCircleOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a' }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={8}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Late" value={stats.late} prefix={<ClockCircleOutlined style={{ color: '#d97706' }} />} valueStyle={{ color: '#d97706' }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={8}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Absent" value={stats.absent} prefix={<CloseCircleOutlined style={{ color: '#dc2626' }} />} valueStyle={{ color: '#dc2626' }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={8}>
-          <Card bordered={false} className="shadow-sm">
-            <Statistic title="Leave" value={stats.leave} prefix={<CalendarOutlined style={{ color: '#7c3aed' }} />} valueStyle={{ color: '#7c3aed' }} />
-          </Card>
-        </Col>
-      </Row>
+      {showSummary && (
+        <Row gutter={[16, 16]} className="mb-4">
+          <Col xs={24} sm={12} md={8} lg={6}>
+            <Card bordered={false} className="shadow-sm">
+              <Statistic
+                title={summaryTitle}
+                value={filteredRows.length}
+                prefix={<TeamOutlined style={{ color: '#1677ff' }} />}
+              />
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       {/* Results */}
       <Card
