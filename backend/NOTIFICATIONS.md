@@ -4,7 +4,8 @@ The authenticated admin and employee pages show a floating notification bell. It
 
 Key events create in-app notifications:
 
-- Attendance clock-in and clock-out, guest check-ins, employee registrations, and new leave or early-leave requests notify active admins.
+- Employee registrations send a receipt to the applicant and notify active admins. Approval, rejection, and revocation send the corresponding email to the employee and notify admins.
+- Attendance clock-in and clock-out, guest check-ins, and new leave or early-leave requests notify active admins. Leave applicants also receive a submission confirmation.
 - Guest assignment or reassignment notifies the assigned employee and admins. A previously assigned employee is also notified when the assignment changes.
 - Guest status updates notify admins.
 - Leave decisions, early-leave decisions, employee approval changes, and admin employee-profile changes notify the affected employee and admins.
@@ -29,7 +30,7 @@ The previous `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, 
 
 ## Database and Render deployment
 
-Notification storage is created by migrations `013_create_notifications.js` and `014_create_notification_email_settings.js`. In the Render backend service, set the **Start Command** to:
+Notification storage is created by migrations `013_create_notifications.js`, `014_create_notification_email_settings.js`, and `015_add_employee_approval_status.js`. In the Render backend service, set the **Start Command** to:
 
 ```text
 npm start

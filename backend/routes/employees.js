@@ -8,7 +8,7 @@ const router = express.Router();
 router.get('/', verifyToken, isAdmin, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT e.id, e.employee_code, e.full_name, e.email, e.phone, e.gender, e.profile_picture, e.department_id, e.role_id, e.system_role, e.is_active, e.is_approved, d.name AS department_name, r.name AS role_name FROM employees e LEFT JOIN departments d ON e.department_id = d.id LEFT JOIN roles r ON e.role_id = r.id ORDER BY e.full_name'
+      'SELECT e.id, e.employee_code, e.full_name, e.email, e.phone, e.gender, e.profile_picture, e.department_id, e.role_id, e.system_role, e.is_active, e.is_approved, e.approval_status, d.name AS department_name, r.name AS role_name FROM employees e LEFT JOIN departments d ON e.department_id = d.id LEFT JOIN roles r ON e.role_id = r.id ORDER BY e.full_name'
     );
     res.json(rows);
   } catch (err) {
@@ -24,8 +24,8 @@ router.post('/', verifyToken, isAdmin, async (req, res) => {
   try {
     const hash = await bcrypt.hash(password, 10);
     const [result] = await pool.query(
-      'INSERT INTO employees (employee_code, full_name, email, password_hash, phone, gender, department_id, role_id, system_role, is_approved) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)',
-      [employee_code, full_name, email, hash, phone, gender, department_id, role_id, system_role || 'employee']
+      'INSERT INTO employees (employee_code, full_name, email, password_hash, phone, gender, department_id, role_id, system_role, is_approved, approval_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)',
+      [employee_code, full_name, email, hash, phone, gender, department_id, role_id, system_role || 'employee', 'approved']
     );
     await notifyUser(result.insertId, {
       type: 'employee_created',
@@ -46,27 +46,78 @@ router.post('/', verifyToken, isAdmin, async (req, res) => {
 });
 
 router.put('/:id/approve', verifyToken, isAdmin, async (req, res) => {
-  const { approve } = req.body;
+  const requestedDecision = req.body?.decision;
+  const legacyApprove = req.body?.approve;
+  if (
+    (requestedDecision != null && !['approve', 'reject', 'revoke'].includes(requestedDecision)) ||
+    (requestedDecision == null && typeof legacyApprove !== 'boolean')
+  ) {
+    return res.status(400).json({ message: 'Choose approve, reject, or revoke.' });
+  }
+
   try {
+    const [employees] = await pool.query(
+      'SELECT id, full_name, approval_status FROM employees WHERE id = ?',
+      [req.params.id]
+    );
+    if (!employees.length) {
+      return res.status(404).json({ message: 'Employee not found' });
+    }
+
+    const employee = employees[0];
+    const decision = requestedDecision || (
+      legacyApprove
+        ? 'approve'
+        : employee.approval_status === 'approved'
+          ? 'revoke'
+          : 'reject'
+    );
+
+    if (decision === 'reject' && employee.approval_status !== 'pending') {
+      return res.status(400).json({ message: 'Only pending registrations can be rejected.' });
+    }
+    if (decision === 'revoke' && employee.approval_status !== 'approved') {
+      return res.status(400).json({ message: 'Only approved accounts can be revoked.' });
+    }
+    if (decision === 'approve' && employee.approval_status === 'approved') {
+      return res.status(400).json({ message: 'This employee is already approved.' });
+    }
+
+    const approvalStatus = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'revoked';
     await pool.query(
-      'UPDATE employees SET is_approved = ? WHERE id = ?',
-      [approve ? 1 : 0, req.params.id]
+      'UPDATE employees SET is_approved = ?, approval_status = ? WHERE id = ?',
+      [decision === 'approve' ? 1 : 0, approvalStatus, req.params.id]
     );
     await notifyUser(req.params.id, {
-      type: 'employee_approval',
-      title: approve ? 'Your account was approved' : 'Your account approval was revoked',
-      message: approve
+      type: `employee_${approvalStatus}`,
+      title: approvalStatus === 'approved'
+        ? 'Your account was approved'
+        : approvalStatus === 'rejected'
+          ? 'Your registration was not approved'
+          : 'Your account approval was revoked',
+      message: approvalStatus === 'approved'
         ? 'An administrator approved your account. You can now sign in.'
-        : 'An administrator changed your account approval status.',
+        : approvalStatus === 'rejected'
+          ? 'An administrator did not approve your registration. Contact the office if you need more information.'
+          : 'An administrator revoked your account approval. You can no longer sign in. Contact the office if you believe this is an error.',
       targetPath: '/dashboard',
     });
     await notifyAdmins({
-      type: 'employee_approval',
-      title: approve ? 'Employee approved' : 'Employee approval revoked',
-      message: `Employee #${req.params.id} was ${approve ? 'approved' : 'had approval revoked'}.`,
+      type: `employee_${approvalStatus}`,
+      title: approvalStatus === 'approved'
+        ? 'Employee approved'
+        : approvalStatus === 'rejected'
+          ? 'Employee registration rejected'
+          : 'Employee approval revoked',
+      message: `${employee.full_name}'s account status was changed to ${approvalStatus}.`,
       targetPath: '/employees',
     });
-    res.json({ message: approve ? 'Employee approved' : 'Approval revoked' });
+    const responseMessage = approvalStatus === 'approved'
+      ? 'Employee approved'
+      : approvalStatus === 'rejected'
+        ? 'Employee registration rejected'
+        : 'Employee approval revoked';
+    res.json({ message: responseMessage, approval_status: approvalStatus });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

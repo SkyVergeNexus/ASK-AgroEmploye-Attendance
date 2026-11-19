@@ -97,8 +97,8 @@ async function main() {
       const hash = await bcrypt.hash(process.env.SEED_ADMIN_PASSWORD, 10);
       await db.query(
         `INSERT INTO employees
-          (employee_code, full_name, email, password_hash, gender, department_id, role_id, system_role, is_approved)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'admin', TRUE)`,
+          (employee_code, full_name, email, password_hash, gender, department_id, role_id, system_role, is_approved, approval_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'admin', TRUE, 'approved')`,
         [
           process.env.SEED_ADMIN_CODE,
           process.env.SEED_ADMIN_NAME,
@@ -112,7 +112,7 @@ async function main() {
       created = true;
     } else if (!existing[0].is_approved) {
       await db.query(
-        'UPDATE employees SET is_approved = TRUE WHERE id = ?',
+        "UPDATE employees SET is_approved = TRUE, approval_status = 'approved' WHERE id = ?",
         [existing[0].id]
       );
       console.log('[seed] existing admin force-approved');

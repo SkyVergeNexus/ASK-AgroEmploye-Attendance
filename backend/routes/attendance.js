@@ -557,6 +557,12 @@ router.post('/early-leave/request', verifyToken, async (req, res) => {
 
     logger(`early-leave request user=${req.user.id}`);
     const employeeName = req.user.full_name || `Employee #${req.user.id}`;
+    await notifyUser(req.user.id, {
+      type: 'early_leave_request_received',
+      title: 'Early-leave request received',
+      message: 'Your early-leave request was submitted and is waiting for admin review.',
+      targetPath: '/leave-requests',
+    });
     await notifyAdmins({
       type: 'early_leave_request',
       title: 'Early-leave request submitted',

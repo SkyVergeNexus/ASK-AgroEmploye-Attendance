@@ -16,6 +16,17 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 
+const APPROVAL_STATUS_META = {
+  pending: { color: 'orange', label: 'Pending' },
+  approved: { color: 'green', label: 'Approved' },
+  rejected: { color: 'red', label: 'Rejected' },
+  revoked: { color: 'volcano', label: 'Revoked' },
+};
+
+function getApprovalStatus(employee) {
+  return employee.approval_status || (Number(employee.is_approved) ? 'approved' : 'pending');
+}
+
 export default function Employees() {
   const [list, setList] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -118,13 +129,24 @@ export default function Employees() {
     }
   };
 
-  const approve = async (id, approveIt) => {
+  const decideApproval = async (id, decision) => {
     setActionLoading(true);
     try {
-      await api.put('/employees/' + id + '/approve', { approve: approveIt });
-      message.success(approveIt ? 'Approved' : 'Approval revoked');
-      // Update the viewing row in-place so the modal reflects the change
-      setViewing((v) => (v && v.id === id ? { ...v, is_approved: approveIt ? 1 : 0 } : v));
+      const { data } = await api.put('/employees/' + id + '/approve', { decision });
+      message.success(data.message || 'Employee status updated');
+      setViewing((v) => (
+        v && v.id === id
+          ? {
+              ...v,
+              is_approved: decision === 'approve' ? 1 : 0,
+              approval_status: decision === 'approve'
+                ? 'approved'
+                : decision === 'reject'
+                  ? 'rejected'
+                  : 'revoked',
+            }
+          : v
+      ));
       load();
     } catch (err) {
       message.error(err.response?.data?.message || 'Action failed');
@@ -153,8 +175,11 @@ export default function Employees() {
     );
   });
 
-  const pending = filtered.filter((e) => !e.is_approved);
-  const approved = filtered.filter((e) => e.is_approved);
+  const pending = filtered.filter((e) => getApprovalStatus(e) === 'pending');
+  const approved = filtered.filter((e) => getApprovalStatus(e) === 'approved');
+  const rejectedOrRevoked = filtered.filter((e) =>
+    ['rejected', 'revoked'].includes(getApprovalStatus(e))
+  );
 
   const columns = [
     {
@@ -194,8 +219,10 @@ export default function Employees() {
       title: 'Status',
       dataIndex: 'is_approved',
       key: 'is_approved',
-      render: (v) =>
-        v ? <Tag color="green">Approved</Tag> : <Tag color="orange">Pending</Tag>,
+      render: (_, row) => {
+        const status = APPROVAL_STATUS_META[getApprovalStatus(row)];
+        return <Tag color={status.color}>{status.label}</Tag>;
+      },
     },
     {
       title: '',
@@ -266,11 +293,9 @@ export default function Employees() {
           <Tag color={row.system_role === 'admin' ? 'gold' : 'blue'}>
             {row.system_role === 'admin' ? 'Admin' : 'Employee'}
           </Tag>
-          {row.is_approved ? (
-            <Tag color="green">Approved</Tag>
-          ) : (
-            <Tag color="orange">Pending</Tag>
-          )}
+          <Tag color={APPROVAL_STATUS_META[getApprovalStatus(row)].color}>
+            {APPROVAL_STATUS_META[getApprovalStatus(row)].label}
+          </Tag>
         </Space>
       </Space>
     </Card>
@@ -298,7 +323,7 @@ export default function Employees() {
   // Footer for the view modal — actions depend on status
   const viewFooter = () => {
     if (!viewing) return null;
-    const isApproved = !!Number(viewing.is_approved);
+    const approvalStatus = getApprovalStatus(viewing);
     return (
       <Space>
         <Button onClick={closeView}>Close</Button>
@@ -310,22 +335,41 @@ export default function Employees() {
         >
           Delete
         </Button>
-        {isApproved ? (
+        {approvalStatus === 'approved' ? (
           <Button
             icon={<CloseOutlined />}
             loading={actionLoading}
-            onClick={() => approve(viewing.id, false)}
+            onClick={() => decideApproval(viewing.id, 'revoke')}
           >
             Revoke approval
           </Button>
+        ) : approvalStatus === 'pending' ? (
+          <>
+            <Button
+              danger
+              icon={<CloseOutlined />}
+              loading={actionLoading}
+              onClick={() => decideApproval(viewing.id, 'reject')}
+            >
+              Reject registration
+            </Button>
+            <Button
+              type="primary"
+              icon={<CheckOutlined />}
+              loading={actionLoading}
+              onClick={() => decideApproval(viewing.id, 'approve')}
+            >
+              Approve
+            </Button>
+          </>
         ) : (
           <Button
             type="primary"
             icon={<CheckOutlined />}
             loading={actionLoading}
-            onClick={() => approve(viewing.id, true)}
+            onClick={() => decideApproval(viewing.id, 'approve')}
           >
-            Approve
+            Approve again
           </Button>
         )}
       </Space>
@@ -364,26 +408,35 @@ export default function Employees() {
 
       {/* Stats */}
       <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card variant="borderless" className="shadow-sm">
             <Statistic title="Total Employees" value={list.length} />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card variant="borderless" className="shadow-sm">
             <Statistic
               title="Approved"
-              value={list.filter((e) => e.is_approved).length}
+              value={list.filter((e) => getApprovalStatus(e) === 'approved').length}
               styles={{ content: { color: '#16a34a' } }}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card variant="borderless" className="shadow-sm">
             <Statistic
               title="Pending Approval"
-              value={list.filter((e) => !e.is_approved).length}
+              value={list.filter((e) => getApprovalStatus(e) === 'pending').length}
               styles={{ content: { color: '#d97706' } }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={6}>
+          <Card variant="borderless" className="shadow-sm">
+            <Statistic
+              title="Rejected / Revoked"
+              value={list.filter((e) => ['rejected', 'revoked'].includes(getApprovalStatus(e))).length}
+              styles={{ content: { color: '#dc2626' } }}
             />
           </Card>
         </Col>
@@ -414,6 +467,16 @@ export default function Employees() {
                 </span>
               ),
               children: renderList(pending, 'No pending registrations'),
+            },
+            {
+              key: 'declined',
+              label: (
+                <span>
+                  Rejected / revoked{' '}
+                  <Badge count={rejectedOrRevoked.length} showZero color="#dc2626" />
+                </span>
+              ),
+              children: renderList(rejectedOrRevoked, 'No rejected or revoked accounts'),
             },
           ]}
         />
@@ -563,10 +626,10 @@ export default function Employees() {
                 </Text>
               </div>
               <Tag
-                color={Number(viewing.is_approved) ? 'green' : 'orange'}
+                color={APPROVAL_STATUS_META[getApprovalStatus(viewing)].color}
                 style={{ marginLeft: 8 }}
               >
-                {Number(viewing.is_approved) ? 'Approved' : 'Pending'}
+                {APPROVAL_STATUS_META[getApprovalStatus(viewing)].label}
               </Tag>
             </Space>
           )
@@ -617,11 +680,9 @@ export default function Employees() {
                 <Descriptions.Item
                   label={<><ClockCircleOutlined /> Status</>}
                 >
-                  {viewing.is_approved ? (
-                    <Tag color="green">Approved</Tag>
-                  ) : (
-                    <Tag color="orange">Pending admin approval</Tag>
-                  )}
+                  <Tag color={APPROVAL_STATUS_META[getApprovalStatus(viewing)].color}>
+                    {APPROVAL_STATUS_META[getApprovalStatus(viewing)].label}
+                  </Tag>
                 </Descriptions.Item>
                 {viewing.created_at && (
                   <Descriptions.Item label="Joined" span={isMobile ? 1 : 2}>
@@ -635,7 +696,7 @@ export default function Employees() {
 
             {/* Extra detail — admin can decide here */}
             <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
-              Use the actions below to approve/revoke or delete this employee.
+              Use the actions below to approve, reject, revoke, or delete this employee.
             </div>
           </div>
         )}

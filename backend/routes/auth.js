@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const upload = require('../middleware/upload');
 const { persistUpload, removeTemporaryUpload } = require('../helpers/imageStorage');
-const { notifyAdmins } = require('../helpers/notifications');
+const { notifyAdmins, notifyUser } = require('../helpers/notifications');
 const router = express.Router();
 
 // ============ REGISTER ============
@@ -110,6 +110,12 @@ router.post('/register', upload.single('picture'), async (req, res) => {
     );
 
     console.log('[register] SUCCESS — new employee id:', result.insertId);
+    await notifyUser(result.insertId, {
+      type: 'employee_registration_received',
+      title: 'Registration received',
+      message: `Your registration is complete and is waiting for admin approval. We will email you when a decision is made.`,
+      targetPath: '/login',
+    });
     await notifyAdmins({
       type: 'employee_registration',
       title: 'New employee registration',
@@ -207,7 +213,12 @@ router.post('/login', async (req, res) => {
     }
     if (!user.is_approved) {
       console.log('[login] ACCOUNT NOT APPROVED');
-      return res.status(403).json({ message: 'Account pending admin approval' });
+      const approvalMessage = user.approval_status === 'rejected'
+        ? 'Your registration was not approved. Contact the office if you need more information.'
+        : user.approval_status === 'revoked'
+          ? 'Your account approval was revoked. Contact the office for assistance.'
+          : 'Account pending admin approval';
+      return res.status(403).json({ message: approvalMessage });
     }
 
     const token = jwt.sign(
@@ -244,6 +255,7 @@ router.post('/login', async (req, res) => {
         role_name: user.role_name,
         system_role: user.system_role,
         is_approved: user.is_approved,
+        approval_status: user.approval_status,
       },
     });
   } catch (err) {

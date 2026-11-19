@@ -80,6 +80,12 @@ router.post('/', verifyToken, employeeOnly, async (req, res) => {
        VALUES (?, ?, ?, ?)`,
       [req.user.id, start_date, end_date, reasonText]
     );
+    await notifyUser(req.user.id, {
+      type: 'leave_request_received',
+      title: 'Leave request received',
+      message: `Your leave request from ${start_date} to ${end_date} was submitted and is waiting for admin review.`,
+      targetPath: '/leave-requests',
+    });
     await notifyAdmins({
       type: 'leave_request',
       title: 'Leave request submitted',
