@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { createSmtpTransport, loadSmtpConfig } = require('./smtpSettings');
+const { sendGmailMessage } = require('./googleMail');
 
 let smtpWarningLogged = false;
 
@@ -23,7 +24,13 @@ async function getMailer() {
     return null;
   }
 
-  return { config, mailer: createSmtpTransport(config) };
+  const mailer = config.provider === 'gmail_api'
+    ? {
+        sendMail: (message) => sendGmailMessage(config, message),
+        close: () => {},
+      }
+    : createSmtpTransport(config);
+  return { config, mailer };
 }
 
 async function notifyUsers(employeeIds, notification) {

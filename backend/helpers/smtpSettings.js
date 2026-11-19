@@ -1,5 +1,10 @@
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const {
+  getGoogleOAuthConfig,
+  isGoogleOAuthConfigured,
+  refreshGoogleAccessToken,
+} = require('./googleMail');
 
 function getEncryptionKey() {
   const encoded = process.env.SMTP_CREDENTIALS_ENCRYPTION_KEY;
@@ -61,6 +66,7 @@ function environmentSmtpConfig() {
     host,
     port,
     secure: String(process.env.SMTP_SECURE).toLowerCase() === 'true' || port === 465,
+    provider: 'smtp',
     username,
     password,
     fromEmail,
@@ -72,7 +78,8 @@ async function loadSmtpConfig(pool) {
   let rows;
   try {
     [rows] = await pool.query(
-      `SELECT host, port, secure, username, encrypted_password, from_email
+      `SELECT host, port, secure, provider, username, encrypted_password,
+              encrypted_google_refresh_token, from_email
        FROM notification_email_settings
        WHERE id = 1`
     );
@@ -84,7 +91,29 @@ async function loadSmtpConfig(pool) {
   if (!rows.length) return environmentSmtpConfig();
 
   const settings = rows[0];
+  if (settings.provider === 'gmail_api') {
+    if (!settings.encrypted_google_refresh_token) {
+      throw new Error('Connect the Gmail account before sending email.');
+    }
+    const oauthConfig = getGoogleOAuthConfig();
+    const refreshToken = decryptPassword(settings.encrypted_google_refresh_token);
+    const token = await refreshGoogleAccessToken(oauthConfig, refreshToken);
+    if (token.refreshToken !== refreshToken) {
+      await pool.query(
+        'UPDATE notification_email_settings SET encrypted_google_refresh_token = ? WHERE id = 1',
+        [encryptPassword(token.refreshToken)]
+      );
+    }
+    return {
+      provider: 'gmail_api',
+      fromEmail: settings.from_email,
+      accessToken: token.accessToken,
+      source: 'database',
+    };
+  }
+
   return {
+    provider: 'smtp',
     host: settings.host,
     port: Number(settings.port),
     secure: Boolean(Number(settings.secure)),
@@ -99,7 +128,8 @@ async function getPublicSmtpSettings(pool) {
   let rows;
   try {
     [rows] = await pool.query(
-      `SELECT host, port, secure, username, encrypted_password, from_email
+      `SELECT host, port, secure, provider, username, encrypted_password,
+              encrypted_google_refresh_token, from_email
        FROM notification_email_settings
        WHERE id = 1`
     );
@@ -112,22 +142,26 @@ async function getPublicSmtpSettings(pool) {
   const environment = saved ? null : environmentSmtpConfig();
   const settings = saved
     ? {
+        provider: saved.provider,
         host: saved.host,
         port: Number(saved.port),
         secure: Boolean(Number(saved.secure)),
         username: saved.username,
         fromEmail: saved.from_email,
-        hasPassword: Boolean(saved.encrypted_password),
+        hasPassword: saved.provider === 'smtp' && Boolean(saved.encrypted_password),
+        gmailApiConnected: saved.provider === 'gmail_api' && Boolean(saved.encrypted_google_refresh_token),
         source: 'database',
         configured: true,
       }
     : {
+        provider: environment?.provider || 'smtp',
         host: environment?.host || process.env.SMTP_HOST || '',
         port: environment?.port || Number(process.env.SMTP_PORT) || 587,
         secure: environment?.secure || String(process.env.SMTP_SECURE).toLowerCase() === 'true',
         username: environment?.username || process.env.SMTP_USER || '',
         fromEmail: environment?.fromEmail || process.env.NOTIFICATION_FROM_EMAIL || '',
         hasPassword: Boolean(environment?.password),
+        gmailApiConnected: false,
         source: environment ? 'environment' : 'none',
         configured: Boolean(environment),
       };
@@ -135,6 +169,7 @@ async function getPublicSmtpSettings(pool) {
   return {
     ...settings,
     encryptionKeyConfigured: isEncryptionKeyConfigured(),
+    googleOAuthConfigured: isGoogleOAuthConfigured(),
   };
 }
 
