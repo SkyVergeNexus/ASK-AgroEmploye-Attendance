@@ -49,7 +49,18 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   if (password.length > 1000) {
     return res.status(400).json({ message: 'SMTP password is too long.' });
   }
-  if (port === 465 && !secure) {
+  if (host.toLowerCase() === 'smtp.gmail.com') {
+    if (port !== 465 && port !== 587) {
+      return res.status(400).json({
+        message: 'Gmail SMTP uses port 465 or 587. Use 465 with implicit TLS on, or 587 with implicit TLS off.',
+      });
+    }
+    if ((port === 465 && !secure) || (port === 587 && secure)) {
+      return res.status(400).json({
+        message: 'For Gmail, use implicit TLS on port 465 and off on port 587.',
+      });
+    }
+  } else if (port === 465 && !secure) {
     return res.status(400).json({ message: 'Port 465 requires implicit TLS to be enabled.' });
   }
 
