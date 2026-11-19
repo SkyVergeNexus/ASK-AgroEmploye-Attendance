@@ -15,7 +15,7 @@ function loadLocalities() {
   } catch (error) {
     if (error.code === 'ENOENT') {
       const missingDataError = new Error(
-        'Nearest-locality data is missing. Run "npm run download:localities" in the backend before starting the API.'
+        'Nearest-locality data is unavailable. The backend downloads it automatically on startup; check the backend logs or run "npm run download:localities" from the backend directory.'
       );
       missingDataError.code = 'LOCALITY_DATA_MISSING';
       throw missingDataError;

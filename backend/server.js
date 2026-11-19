@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
+const { downloadLocalities } = require('./scripts/downloadLocalities');
 
 const app = express();
 
@@ -51,6 +52,20 @@ app.use((err, req, res, next) => {
 
 // ---------- START ----------
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () =>
-  console.log('Server on http://localhost:' + PORT)
-);
+
+async function startServer() {
+  try {
+    await downloadLocalities();
+  } catch (error) {
+    console.error(
+      '[locality data] Could not download the GeoNames dataset. Nearby locality lookups will remain unavailable until it can be downloaded:',
+      error.message
+    );
+  }
+
+  app.listen(PORT, '0.0.0.0', () =>
+    console.log('Server on http://localhost:' + PORT)
+  );
+}
+
+startServer();

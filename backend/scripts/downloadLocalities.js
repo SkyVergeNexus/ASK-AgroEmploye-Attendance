@@ -6,7 +6,22 @@ const DATA_URL = 'https://download.geonames.org/export/dump/cities1000.zip';
 const DATA_DIRECTORY = path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIRECTORY, 'cities1000.txt');
 
+function hasLocalityData() {
+  try {
+    const stats = fs.statSync(DATA_FILE);
+    return stats.isFile() && stats.size > 0;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 async function downloadLocalities() {
+  if (hasLocalityData()) {
+    console.log('GeoNames locality dataset is already installed.');
+    return;
+  }
+
   console.log('Downloading the GeoNames cities1000 dataset...');
   const response = await fetch(DATA_URL);
   if (!response.ok) {
@@ -33,7 +48,11 @@ async function downloadLocalities() {
   console.log(`Installed ${recordCount} GeoNames locality records.`);
 }
 
-downloadLocalities().catch((error) => {
-  console.error('Unable to install the GeoNames locality dataset:', error.message);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  downloadLocalities().catch((error) => {
+    console.error('Unable to install the GeoNames locality dataset:', error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { downloadLocalities, hasLocalityData };
