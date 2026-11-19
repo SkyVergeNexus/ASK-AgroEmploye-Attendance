@@ -20,6 +20,7 @@ export default function AdminSidebar({ open, onClose }) {
       <p className="px-4 pt-4 pb-2 text-xs uppercase tracking-wider text-green-400">
         Account
       </p>
+      <NavLink to="/settings" className={linkClass}>System Settings</NavLink>
       <NavLink to="/profile" className={linkClass}>My Profile</NavLink>
     </SidebarShell>
   );

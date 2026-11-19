@@ -85,8 +85,10 @@ export default function Dashboard() {
   const [remoteClockOutOpen, setRemoteClockOutOpen] = useState(false);
   const [remoteLocation, setRemoteLocation] = useState('');
   const [remoteSelfie, setRemoteSelfie] = useState(null);
+  const [selfieCoordinates, setSelfieCoordinates] = useState(null);
   const [selfiePreview, setSelfiePreview] = useState(null);
   const [selfieCapturedAt, setSelfieCapturedAt] = useState(null);
+  const [capturingSelfie, setCapturingSelfie] = useState(false);
 
   const [taskInput, setTaskInput] = useState('');
   const [remoteTasks, setRemoteTasks] = useState([]);
@@ -209,6 +211,9 @@ export default function Dashboard() {
 
   // ═══════════ CAMERA CAPTURE ═══════════
   const openCamera = async () => {
+    setRemoteSelfie(null);
+    setSelfieCoordinates(null);
+    setSelfieCapturedAt(null);
     setCameraError(null);
     setCameraReady(false);
     setCameraOpen(true);
@@ -264,9 +269,27 @@ export default function Dashboard() {
 
   const captureFromCamera = async () => {
     const video = videoRef.current;
-    if (!video || !cameraReady) return;
+    if (!video || !cameraReady || capturingSelfie) return;
 
+    setCapturingSelfie(true);
     try {
+      if (!navigator.geolocation) {
+        throw new Error('Location is not supported by this browser');
+      }
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          resolve,
+          (error) => reject(new Error(error.message || 'Allow location access to capture the selfie location')),
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+      });
+      const coordinates = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      };
+      const capturedAt = new Date();
+
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth || 1280;
       canvas.height = video.videoHeight || 720;
@@ -286,11 +309,14 @@ export default function Dashboard() {
       });
 
       setRemoteSelfie(file);
-      setSelfieCapturedAt(new Date());
+      setSelfieCoordinates(coordinates);
+      setSelfieCapturedAt(capturedAt);
       closeCamera();
       message.success('Photo captured');
     } catch (err) {
-      message.error(err.message || 'Capture failed');
+      message.error(err.message || 'Could not capture photo and location');
+    } finally {
+      setCapturingSelfie(false);
     }
   };
 
@@ -318,21 +344,16 @@ export default function Dashboard() {
       message.error('Take a live selfie with your camera before clocking in');
       return;
     }
+    if (mode === 'remote' && !selfieCoordinates) {
+      message.error('Retake the selfie to capture its GPS location');
+      return;
+    }
     setClocking(true);
     setClockInError(null);
     try {
       let coords = geo.coords;
       if (mode === 'remote') {
-        if (!navigator.geolocation) {
-          throw new Error('Location is not supported by this browser');
-        }
-        coords = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-            (error) => reject(new Error(error.message || 'Allow location access to clock in remotely')),
-            { enableHighAccuracy: true, timeout: 8000 }
-          );
-        });
+        coords = selfieCoordinates;
       } else if (!coords && navigator.geolocation) {
         coords = await new Promise((resolve) => {
           navigator.geolocation.getCurrentPosition(
@@ -365,6 +386,7 @@ export default function Dashboard() {
       setRemoteClockInOpen(false);
       setRemoteLocation('');
       setRemoteSelfie(null);
+      setSelfieCoordinates(null);
       setSelfieCapturedAt(null);
       load();
     } catch (e) {
@@ -1358,11 +1380,14 @@ export default function Dashboard() {
         okText="Submit & clock in"
         cancelText="Cancel"
         confirmLoading={clocking}
-        okButtonProps={{ disabled: !remoteLocation.trim() || !remoteSelfie }}
+        okButtonProps={{
+          disabled: !remoteLocation.trim() || !remoteSelfie || !selfieCoordinates,
+        }}
         onOk={() => clockIn('remote')}
         onCancel={() => {
           setRemoteClockInOpen(false);
           setRemoteSelfie(null);
+          setSelfieCoordinates(null);
           setSelfieCapturedAt(null);
         }}
         centered
@@ -1376,12 +1401,12 @@ export default function Dashboard() {
             title="Remote attendance check"
             description={
               settings?.work_start && settings?.work_end
-                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Allow GPS and take a live selfie at your work location.`
-                : 'Allow GPS and take a live selfie at your work location during working hours.'
+                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live selfie. Fresh GPS coordinates are captured with the selfie and saved with the attendance record.`
+                : 'Enter your work location, allow GPS, and take a live selfie during working hours. Fresh GPS coordinates are captured with the selfie and saved with the attendance record.'
             }
           />
           <div>
-            <Text strong>Where are you working today?</Text>
+            <Text strong>Work location (enter the site or place name)</Text>
             <Input
               value={remoteLocation}
               onChange={(e) => setRemoteLocation(e.target.value)}
@@ -1408,6 +1433,14 @@ export default function Dashboard() {
                     Captured at {selfieCapturedAt.toLocaleTimeString()}
                   </Text>
                 )}
+                {selfieCoordinates && (
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
+                    GPS captured with selfie: {selfieCoordinates.lat.toFixed(6)}, {selfieCoordinates.lng.toFixed(6)}
+                    {Number.isFinite(selfieCoordinates.accuracy)
+                      ? ` (accuracy ±${Math.round(selfieCoordinates.accuracy)} m)`
+                      : ''}
+                  </Text>
+                )}
                 <Space style={{ marginTop: 8 }}>
                   <Button icon={<CameraOutlined />} onClick={openCamera} size="small">
                     Retake
@@ -1417,6 +1450,7 @@ export default function Dashboard() {
                     danger
                     onClick={() => {
                       setRemoteSelfie(null);
+                      setSelfieCoordinates(null);
                       setSelfieCapturedAt(null);
                     }}
                     style={{ paddingLeft: 0 }}
@@ -1525,10 +1559,11 @@ export default function Dashboard() {
               size="large"
               icon={<CameraOutlined />}
               onClick={captureFromCamera}
-              disabled={!cameraReady || !!cameraError}
+              disabled={!cameraReady || !!cameraError || capturingSelfie}
+              loading={capturingSelfie}
               style={{ minWidth: 160, backgroundColor: cameraReady ? '#15803d' : undefined }}
             >
-              Capture
+              {capturingSelfie ? 'Getting GPS and capturing…' : 'Capture'}
             </Button>
           </Space>
 

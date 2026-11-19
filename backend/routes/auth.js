@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const upload = require('../middleware/upload');
 const { persistUpload, removeTemporaryUpload } = require('../helpers/imageStorage');
+const { notifyAdmins } = require('../helpers/notifications');
 const router = express.Router();
 
 // ============ REGISTER ============
@@ -109,6 +110,12 @@ router.post('/register', upload.single('picture'), async (req, res) => {
     );
 
     console.log('[register] SUCCESS — new employee id:', result.insertId);
+    await notifyAdmins({
+      type: 'employee_registration',
+      title: 'New employee registration',
+      message: `${name} submitted an employee registration for approval.`,
+      targetPath: '/employees',
+    });
     res.status(201).json({
       message: 'Registration submitted. Awaiting admin approval.',
     });

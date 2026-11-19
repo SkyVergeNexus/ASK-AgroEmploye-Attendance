@@ -3,6 +3,8 @@ const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { persistUpload } = require('../helpers/imageStorage');
+const { nearestLocality } = require('../helpers/reverseGeocode');
+const { notifyAdmins, notifyUser } = require('../helpers/notifications');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
@@ -362,6 +364,13 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     selfieSaved = true;
 
     logger(`clock-in user=${req.user.id} mode=${mode} method=${method} status=${status}`);
+    const employeeName = req.user.full_name || `Employee #${req.user.id}`;
+    await notifyAdmins({
+      type: 'attendance_clock_in',
+      title: 'Employee clocked in',
+      message: `${employeeName} clocked in ${mode === 'remote' ? 'remotely' : 'on-site'} (${status}).`,
+      targetPath: '/reports',
+    });
 
     res.json({
       message: 'Clocked in',
@@ -456,6 +465,13 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     }
 
     logger(`clock-out user=${req.user.id} remote=${isRemote} early=${isEarly}`);
+    const employeeName = req.user.full_name || `Employee #${req.user.id}`;
+    await notifyAdmins({
+      type: 'attendance_clock_out',
+      title: 'Employee clocked out',
+      message: `${employeeName} clocked out${isEarly ? ' early' : ''}.`,
+      targetPath: '/reports',
+    });
     res.json({ message: 'Clocked out' });
   } catch (err) {
     serverError(res, err, 'clock-out');
@@ -540,6 +556,13 @@ router.post('/early-leave/request', verifyToken, async (req, res) => {
     );
 
     logger(`early-leave request user=${req.user.id}`);
+    const employeeName = req.user.full_name || `Employee #${req.user.id}`;
+    await notifyAdmins({
+      type: 'early_leave_request',
+      title: 'Early-leave request submitted',
+      message: `${employeeName} requested to leave early today.`,
+      targetPath: '/early-leave',
+    });
     res.status(201).json({ message: 'Request submitted. Awaiting admin approval.' });
   } catch (err) {
     serverError(res, err, 'early-leave request');
@@ -605,6 +628,24 @@ router.put('/early-leave/:id/decide', verifyToken, isAdmin, async (req, res) => 
     }
 
     logger(`early-leave decide id=${req.params.id} approve=${!!approve} by=${req.user.id}`);
+    const [requestRows] = await pool.query(
+      'SELECT employee_id FROM early_leave_requests WHERE id = ?',
+      [req.params.id]
+    );
+    if (requestRows.length) {
+      await notifyUser(requestRows[0].employee_id, {
+        type: 'early_leave_decision',
+        title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
+        message: `Your early-leave request was ${approve ? 'approved' : 'rejected'}.${admin_note ? ` Admin note: ${String(admin_note).trim()}` : ''}`,
+        targetPath: '/leave-requests',
+      });
+      await notifyAdmins({
+        type: 'early_leave_decision',
+        title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
+        message: `Employee #${requestRows[0].employee_id}'s early-leave request was ${approve ? 'approved' : 'rejected'}.`,
+        targetPath: '/early-leave',
+      });
+    }
     res.json({ message: approve ? 'Approved' : 'Rejected' });
   } catch (err) {
     serverError(res, err, 'early-leave decide');
@@ -645,6 +686,40 @@ router.delete('/early-leave/:id', verifyToken, async (req, res) => {
 // ============================================================
 //  ADMIN VIEWS
 // ============================================================
+router.post('/reverse-geocode', verifyToken, isAdmin, (req, res) => {
+  const latitude = Number(req.body?.lat);
+  const longitude = Number(req.body?.lng);
+
+  if (
+    req.body?.lat == null ||
+    req.body?.lng == null ||
+    String(req.body.lat).trim() === '' ||
+    String(req.body.lng).trim() === '' ||
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return res.status(400).json({ message: 'Valid latitude and longitude are required.' });
+  }
+
+  try {
+    const locality = nearestLocality(latitude, longitude);
+    if (!locality) {
+      return res.status(404).json({ message: 'No nearby locality was found.' });
+    }
+    return res.json(locality);
+  } catch (error) {
+    if (error.code === 'LOCALITY_DATA_MISSING') {
+      return res.status(503).json({ message: error.message });
+    }
+    console.error('[reverse geocode] Locality lookup failed:', error.message);
+    return res.status(500).json({ message: 'Unable to find the nearest locality.' });
+  }
+});
+
 router.get('/all', verifyToken, isAdmin, async (req, res) => {
   const { from, to, employee_id } = req.query;
 

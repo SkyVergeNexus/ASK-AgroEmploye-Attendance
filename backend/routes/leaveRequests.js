@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
+const { notifyAdmins, notifyUser } = require('../helpers/notifications');
 
 const router = express.Router();
 
@@ -79,6 +80,12 @@ router.post('/', verifyToken, employeeOnly, async (req, res) => {
        VALUES (?, ?, ?, ?)`,
       [req.user.id, start_date, end_date, reasonText]
     );
+    await notifyAdmins({
+      type: 'leave_request',
+      title: 'Leave request submitted',
+      message: `Employee #${req.user.id} requested leave from ${start_date} to ${end_date}.`,
+      targetPath: '/leave-requests/admin',
+    });
     res.status(201).json({
       message: 'Absence request submitted for admin approval',
       request_id: result.insertId,
@@ -246,6 +253,20 @@ router.put('/:id/decision', verifyToken, isAdmin, async (req, res) => {
       ]
     );
     await connection.commit();
+    connection.release();
+    connection = null;
+    await notifyUser(request.employee_id, {
+      type: 'leave_decision',
+      title: `Leave request ${decision}`,
+      message: `Your leave request from ${request.start_date} to ${request.end_date} was ${decision}.${admin_note ? ` Admin note: ${String(admin_note).trim()}` : ''}`,
+      targetPath: '/leave-requests',
+    });
+    await notifyAdmins({
+      type: 'leave_decision',
+      title: `Leave request ${decision}`,
+      message: `Employee #${request.employee_id}'s leave request from ${request.start_date} to ${request.end_date} was ${decision}.`,
+      targetPath: '/leave-requests/admin',
+    });
     res.json({
       message: decision === 'approved' ? 'Absence request approved' : 'Absence request rejected',
     });

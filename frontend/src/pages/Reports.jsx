@@ -72,6 +72,9 @@ export default function Reports() {
 
   // Detail modal
   const [viewing, setViewing] = useState(null);
+  const [nearbyLocality, setNearbyLocality] = useState(null);
+  const [locationLookupLoading, setLocationLookupLoading] = useState(false);
+  const [locationLookupError, setLocationLookupError] = useState('');
 
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -117,6 +120,42 @@ export default function Reports() {
     load(range[0], range[1]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNearbyLocality(null);
+    setLocationLookupError('');
+
+    if (!viewing || viewing.clock_in_lat == null || viewing.clock_in_lng == null) {
+      setLocationLookupLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLocationLookupLoading(true);
+    api.post('/attendance/reverse-geocode', {
+      lat: viewing.clock_in_lat,
+      lng: viewing.clock_in_lng,
+    })
+      .then(({ data }) => {
+        if (!cancelled) setNearbyLocality(data);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLocationLookupError(
+            error.response?.data?.message || 'Unable to find the nearest locality.'
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLocationLookupLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewing]);
 
   const applyQuickRange = (key) => {
     setQuickRange(key);
@@ -571,7 +610,7 @@ export default function Reports() {
                 bordered
                 labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
               >
-                <Descriptions.Item label={<><EnvironmentOutlined /> Location</>}>
+                <Descriptions.Item label={<><EnvironmentOutlined /> Reported work location</>}>
                   {r.remote_location || <Text type="secondary">Not recorded</Text>}
                 </Descriptions.Item>
                 <Descriptions.Item label="GPS coordinates">
@@ -581,6 +620,26 @@ export default function Reports() {
                     </Text>
                   ) : (
                     <Text type="secondary">Not captured</Text>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="Nearby locality (approx.)">
+                  {!hasCoord ? (
+                    <Text type="secondary">GPS not captured</Text>
+                  ) : locationLookupLoading ? (
+                    <Text type="secondary">Finding nearest locality…</Text>
+                  ) : locationLookupError ? (
+                    <Text type="danger">{locationLookupError}</Text>
+                  ) : nearbyLocality ? (
+                    <Space direction="vertical" size={0}>
+                      <Text strong>
+                        {nearbyLocality.name}, {nearbyLocality.countryCode}
+                      </Text>
+                      <Text type="secondary">
+                        Nearest mapped place · {nearbyLocality.distanceKm.toFixed(1)} km away · GeoNames
+                      </Text>
+                    </Space>
+                  ) : (
+                    <Text type="secondary">No nearby locality found</Text>
                   )}
                 </Descriptions.Item>
                 <Descriptions.Item label={<><CameraOutlined /> Selfie</>}>

@@ -12,6 +12,7 @@ import dayjs from 'dayjs';
 import api from '../api/axios';
 import { assetUrl } from '../config';
 import toast from 'react-hot-toast';
+import EmailSenderSettings from '../components/EmailSenderSettings';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -615,6 +616,7 @@ export default function Settings() {
           </Form>
         )}
       </Card>
+      <EmailSenderSettings />
     </div>
   );
 }

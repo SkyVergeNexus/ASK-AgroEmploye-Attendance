@@ -20,6 +20,7 @@ import GuestRegister from './pages/GuestRegister';
 import Guests from './pages/Guests';
 import Services from './pages/Services';
 import LeaveRequests from './pages/LeaveRequests';
+import NotificationBell from './components/NotificationBell';
 
 function AppLayout() {
   const { user } = useAuth();
@@ -53,6 +54,7 @@ function AppLayout() {
           <Outlet />
         </main>
       </div>
+      <NotificationBell />
     </div>
   );
 }

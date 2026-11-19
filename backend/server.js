@@ -24,6 +24,8 @@ app.use('/api/profile', require('./routes/profile'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/guests', require('./routes/guests'));
 app.use('/api/services', require('./routes/services'));   // ← NEW
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/email-settings', require('./routes/emailSettings'));
 
 // ---------- HEALTH CHECK ----------
 app.get('/', (_, res) =>

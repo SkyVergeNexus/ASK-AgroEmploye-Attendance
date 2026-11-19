@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
 const { getEmployeeSuggestions } = require('../helpers/assignment');
+const { notifyAdmins, notifyUser } = require('../helpers/notifications');
 const router = express.Router();
 
 // ============ PUBLIC: GUEST REGISTRATION ============
@@ -58,6 +59,13 @@ router.post('/register', async (req, res) => {
         typeof notes === 'string' ? notes.trim() || null : null,
       ]
     );
+
+    await notifyAdmins({
+      type: 'guest_checkin',
+      title: 'New guest checked in',
+      message: `${full_name.trim()} checked in for ${svcRows[0].name}.`,
+      targetPath: '/guests',
+    });
 
     res.status(201).json({
       message: 'Thank you for signing in. Your visit has been registered.',
@@ -166,7 +174,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
   }
   try {
     const [rows] = await pool.query(
-      'SELECT assigned_employee_id, assignment_status FROM guests WHERE id = ?',
+      'SELECT assigned_employee_id, assignment_status, full_name FROM guests WHERE id = ?',
       [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ message: 'Guest not found' });
@@ -199,6 +207,16 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         [status, req.params.id]
       );
     }
+
+    if (req.user.system_role === 'employee') {
+      await notifyAdmins({
+        type: 'guest_status',
+        title: `Guest ${status}`,
+        message: `${rows[0].full_name} was marked ${status}.`,
+        targetPath: '/guests',
+      });
+    }
+
     res.json({ message: `Marked ${status}` });
   } catch (err) {
     console.error('[guests] status:', err.message);
@@ -212,7 +230,8 @@ router.put('/:id/reassign', verifyToken, isAdmin, async (req, res) => {
   if (!employee_id) return res.status(400).json({ message: 'employee_id required' });
   try {
     const [guestRows] = await pool.query(
-      'SELECT id, service_id FROM guests WHERE id = ?',
+      `SELECT id, service_id, assigned_employee_id, assignment_status, full_name
+       FROM guests WHERE id = ?`,
       [req.params.id]
     );
     if (!guestRows.length) return res.status(404).json({ message: 'Guest not found' });
@@ -293,7 +312,36 @@ router.put('/:id/reassign', verifyToken, isAdmin, async (req, res) => {
        WHERE g.id = ?`,
       [req.params.id]
     );
-    res.json({ message: 'Employee assigned', guest: assignedGuestRows[0] });
+    const assignedGuest = assignedGuestRows[0];
+
+    await notifyUser(employee_id, {
+      type: 'guest_assignment',
+      title: 'Guest assigned to you',
+      message: `${assignedGuest.full_name} has been assigned to you for ${assignedGuest.service_name || 'a guest service'}.`,
+      targetPath: '/dashboard',
+    });
+
+    const previousEmployeeId = guestRows[0].assigned_employee_id;
+    if (
+      previousEmployeeId &&
+      Number(previousEmployeeId) !== Number(employee_id)
+    ) {
+      await notifyUser(previousEmployeeId, {
+        type: 'guest_reassigned',
+        title: 'Guest assignment changed',
+        message: `${guestRows[0].full_name} has been reassigned to another employee.`,
+        targetPath: '/dashboard',
+      });
+    }
+
+    await notifyAdmins({
+      type: 'guest_assignment',
+      title: 'Guest employee assigned',
+      message: `${assignedGuest.full_name} was assigned to ${assignedGuest.assigned_employee_name}.`,
+      targetPath: '/guests',
+    });
+
+    res.json({ message: 'Employee assigned', guest: assignedGuest });
   } catch (err) {
     console.error('[guests] reassign:', err.message);
     res.status(500).json({ message: 'Reassign failed' });

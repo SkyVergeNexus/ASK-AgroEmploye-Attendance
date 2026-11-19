@@ -391,7 +391,7 @@ export default function AttendanceHistory() {
                 labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
               >
                 <Descriptions.Item
-                  label={<><EnvironmentOutlined /> Location</>}
+                  label={<><EnvironmentOutlined /> Reported work location</>}
                 >
                   {r.remote_location || <Text type="secondary">Not recorded</Text>}
                 </Descriptions.Item>
