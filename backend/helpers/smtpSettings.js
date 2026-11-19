@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const { refreshAccessToken } = require('./microsoftOAuth');
 
 function getEncryptionKey() {
   const encoded = process.env.SMTP_CREDENTIALS_ENCRYPTION_KEY;
@@ -61,6 +62,7 @@ function environmentSmtpConfig() {
     host,
     port,
     secure: String(process.env.SMTP_SECURE).toLowerCase() === 'true' || port === 465,
+    authType: 'smtp_password',
     username,
     password,
     fromEmail,
@@ -72,7 +74,8 @@ async function loadSmtpConfig(pool) {
   let rows;
   try {
     [rows] = await pool.query(
-      `SELECT host, port, secure, username, encrypted_password, from_email
+      `SELECT host, port, secure, auth_type, username, encrypted_password,
+              encrypted_refresh_token, from_email
        FROM notification_email_settings
        WHERE id = 1`
     );
@@ -84,10 +87,41 @@ async function loadSmtpConfig(pool) {
   if (!rows.length) return environmentSmtpConfig();
 
   const settings = rows[0];
+  if (settings.auth_type === 'outlook_oauth2') {
+    if (!settings.encrypted_refresh_token) {
+      throw new Error('Connect the Outlook mailbox before sending email.');
+    }
+    const clientId = process.env.MICROSOFT_OAUTH_CLIENT_ID?.trim();
+    if (!clientId) {
+      throw new Error('MICROSOFT_OAUTH_CLIENT_ID is not configured.');
+    }
+
+    const refreshToken = decryptPassword(settings.encrypted_refresh_token);
+    const token = await refreshAccessToken(clientId, refreshToken);
+    if (token.refreshToken !== refreshToken) {
+      await pool.query(
+        'UPDATE notification_email_settings SET encrypted_refresh_token = ? WHERE id = 1',
+        [encryptPassword(token.refreshToken)]
+      );
+    }
+    return {
+      host: settings.host,
+      port: Number(settings.port),
+      secure: Boolean(Number(settings.secure)),
+      authType: 'outlook_oauth2',
+      username: settings.username,
+      accessToken: token.accessToken,
+      accessTokenExpires: token.expires,
+      fromEmail: settings.from_email,
+      source: 'database',
+    };
+  }
+
   return {
     host: settings.host,
     port: Number(settings.port),
     secure: Boolean(Number(settings.secure)),
+    authType: 'smtp_password',
     username: settings.username,
     password: decryptPassword(settings.encrypted_password),
     fromEmail: settings.from_email,
@@ -99,7 +133,8 @@ async function getPublicSmtpSettings(pool) {
   let rows;
   try {
     [rows] = await pool.query(
-      `SELECT host, port, secure, username, encrypted_password, from_email
+      `SELECT host, port, secure, auth_type, username, encrypted_password,
+              encrypted_refresh_token, from_email
        FROM notification_email_settings
        WHERE id = 1`
     );
@@ -115,9 +150,11 @@ async function getPublicSmtpSettings(pool) {
         host: saved.host,
         port: Number(saved.port),
         secure: Boolean(Number(saved.secure)),
+        authType: saved.auth_type,
         username: saved.username,
         fromEmail: saved.from_email,
-        hasPassword: Boolean(saved.encrypted_password),
+        hasPassword: saved.auth_type === 'smtp_password' && Boolean(saved.encrypted_password),
+        outlookConnected: saved.auth_type === 'outlook_oauth2' && Boolean(saved.encrypted_refresh_token),
         source: 'database',
         configured: true,
       }
@@ -125,9 +162,11 @@ async function getPublicSmtpSettings(pool) {
         host: environment?.host || process.env.SMTP_HOST || '',
         port: environment?.port || Number(process.env.SMTP_PORT) || 587,
         secure: environment?.secure || String(process.env.SMTP_SECURE).toLowerCase() === 'true',
+        authType: environment?.authType || 'smtp_password',
         username: environment?.username || process.env.SMTP_USER || '',
         fromEmail: environment?.fromEmail || process.env.NOTIFICATION_FROM_EMAIL || '',
         hasPassword: Boolean(environment?.password),
+        outlookConnected: false,
         source: environment ? 'environment' : 'none',
         configured: Boolean(environment),
       };
@@ -135,6 +174,7 @@ async function getPublicSmtpSettings(pool) {
   return {
     ...settings,
     encryptionKeyConfigured: isEncryptionKeyConfigured(),
+    microsoftOAuthConfigured: Boolean(process.env.MICROSOFT_OAUTH_CLIENT_ID?.trim()),
   };
 }
 
@@ -146,9 +186,18 @@ function createSmtpTransport(config) {
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 15000,
-    ...(config.username
-      ? { auth: { user: config.username, pass: config.password } }
-      : {}),
+    ...(config.username && config.authType === 'outlook_oauth2'
+      ? {
+          auth: {
+            type: 'OAuth2',
+            user: config.username,
+            accessToken: config.accessToken,
+            expires: config.accessTokenExpires,
+          },
+        }
+      : config.username
+        ? { auth: { user: config.username, pass: config.password } }
+        : {}),
   });
 }
 
