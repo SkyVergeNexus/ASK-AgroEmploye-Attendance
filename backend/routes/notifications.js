@@ -17,21 +17,37 @@ function handleStorageError(res, error, action) {
 router.get('/', verifyToken, async (req, res) => {
   const requestedLimit = Number(req.query.limit) || 20;
   const limit = Math.min(Math.max(Math.floor(requestedLimit), 1), 50);
+  const requestedOffset = Number(req.query.offset);
+  const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0
+    ? requestedOffset
+    : 0;
+  const unreadOnly = req.query.unread === 'true';
+  const unreadCondition = unreadOnly ? ' AND read_at IS NULL' : '';
 
   try {
     const [items] = await pool.query(
       `SELECT id, event_type, title, message, target_path, created_at, read_at
        FROM notifications
-       WHERE employee_id = ?
+       WHERE employee_id = ?${unreadCondition}
        ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
-      [req.user.id, limit]
+       LIMIT ? OFFSET ?`,
+      [req.user.id, limit, offset]
     );
-    const [[count]] = await pool.query(
-      'SELECT COUNT(*) AS unread_count FROM notifications WHERE employee_id = ? AND read_at IS NULL',
+    const [[counts]] = await pool.query(
+      `SELECT COUNT(*) AS total_count,
+              COALESCE(SUM(read_at IS NULL), 0) AS unread_count
+       FROM notifications
+       WHERE employee_id = ?`,
       [req.user.id]
     );
-    res.json({ items, unread_count: count.unread_count });
+    const totalCount = Number(counts.total_count) || 0;
+    const unreadCount = Number(counts.unread_count) || 0;
+    res.json({
+      items,
+      total_count: totalCount,
+      unread_count: unreadCount,
+      filtered_count: unreadOnly ? unreadCount : totalCount,
+    });
   } catch (error) {
     handleStorageError(res, error, 'list');
   }
