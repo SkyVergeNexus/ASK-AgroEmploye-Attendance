@@ -351,6 +351,14 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
     const [rows] = await pool.query('SELECT * FROM settings WHERE id = 1');
     res.json(rows[0]);
   } catch (err) {
+    if (
+      err.code === 'ER_BAD_FIELD_ERROR' &&
+      String(err.message).includes('auto_clock_out_grace_minutes')
+    ) {
+      return res.status(503).json({
+        message: 'Database migration 019 is pending. Run npm run db:migrate, then restart the backend.',
+      });
+    }
     res.status(500).json({ message: err.message });
   }
 });
