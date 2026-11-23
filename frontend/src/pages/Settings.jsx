@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import {
-  Card, Form, TimePicker, InputNumber, Input, Checkbox, Button, Typography,
+  Card, Form, TimePicker, InputNumber, Input, Button, Typography,
   Space, Alert, Skeleton, Switch, Divider, Tag, Spin, Upload,
 } from 'antd';
 import {
@@ -16,15 +16,6 @@ import EmailSenderSettings from '../components/EmailSenderSettings';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
-const WORKING_DAY_OPTIONS = [
-  { label: 'Monday', value: 1 },
-  { label: 'Tuesday', value: 2 },
-  { label: 'Wednesday', value: 3 },
-  { label: 'Thursday', value: 4 },
-  { label: 'Friday', value: 5 },
-  { label: 'Saturday', value: 6 },
-  { label: 'Sunday', value: 0 },
-];
 
 function ipv4ToInt(ip) {
   const parts = String(ip).split('.');
@@ -83,7 +74,6 @@ export default function Settings() {
         company_name: data.company_name,
         work_start: dayjs(data.work_start, 'HH:mm:ss'),
         work_end: dayjs(data.work_end, 'HH:mm:ss'),
-        working_days: String(data.working_days ?? '1,2,3,4,5').split(',').map(Number),
         auto_clock_out_grace_minutes: data.auto_clock_out_grace_minutes ?? 15,
         late_threshold_minutes: data.late_threshold_minutes,
         office_lat: data.office_lat ? Number(data.office_lat) : null,
@@ -212,7 +202,6 @@ export default function Settings() {
         company_name: values.company_name,
         work_start: values.work_start.format('HH:mm:ss'),
         work_end: values.work_end.format('HH:mm:ss'),
-        working_days: values.working_days,
         auto_clock_out_grace_minutes: values.auto_clock_out_grace_minutes,
         late_threshold_minutes: values.late_threshold_minutes,
         office_lat: values.office_lat,
@@ -249,9 +238,9 @@ export default function Settings() {
         title="Attendance behaviour"
         description={
           <>
-            Employees can clock in only on selected working days and within
-            configured work hours. Anyone clocking in after (work start + late
-            threshold) is marked late. On-site clock-ins follow the checks below
+            Employees can clock in only within configured work hours. Anyone
+            clocking in after (work start + late threshold) is marked late.
+            On-site clock-ins follow the checks below
             when their switches are ON.
             Remote clock-ins require a selfie and GPS location and are only
             accepted during the configured work hours. At closing, open on-site
@@ -303,25 +292,6 @@ export default function Settings() {
                 <TimePicker format="HH:mm" use12Hours={false} style={{ width: '100%' }} />
               </Form.Item>
             </div>
-
-            <Form.Item
-              label="Working Days"
-              name="working_days"
-              extra="Employees may clock in only on the selected days. The default schedule is Monday to Friday."
-              rules={[
-                { type: 'array', required: true, min: 1, message: 'Select at least one working day' },
-              ]}
-            >
-              <Checkbox.Group style={{ width: '100%' }}>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-2">
-                  {WORKING_DAY_OPTIONS.map((day) => (
-                    <Checkbox key={day.value} value={day.value}>
-                      {day.label}
-                    </Checkbox>
-                  ))}
-                </div>
-              </Checkbox.Group>
-            </Form.Item>
 
             <Form.Item
               label="Auto Clock-Out Grace Period (minutes)"

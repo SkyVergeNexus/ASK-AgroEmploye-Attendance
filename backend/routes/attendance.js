@@ -5,7 +5,6 @@ const upload = require('../middleware/upload');
 const { persistUpload } = require('../helpers/imageStorage');
 const { nearestLocality } = require('../helpers/reverseGeocode');
 const { notifyAdmins, notifyUser } = require('../helpers/notifications');
-const { isWorkingDay } = require('../helpers/workSchedule');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
@@ -232,17 +231,10 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     const workStart = todayAt(workStartStr, '08:00:00');
     const workEnd = todayAt(workEndStr, '17:00:00');
 
-    if (!isWorkingDay(now, settings.working_days)) {
-      await removeUploadedSelfie();
-      return res.status(403).json({
-        message: 'Clock-in is not available on a configured non-working day.',
-        outsideWorkDay: true,
-      });
-    }
     if (now < workStart || now > workEnd) {
       await removeUploadedSelfie();
       return res.status(403).json({
-        message: `Clock-in is available between ${workStartStr.slice(0, 5)} and ${workEndStr.slice(0, 5)} on configured working days.`,
+        message: `Clock-in is available between ${workStartStr.slice(0, 5)} and ${workEndStr.slice(0, 5)}.`,
         outsideWorkHours: true,
       });
     }
@@ -412,13 +404,6 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     if (record.clock_out) {
       return res.status(400).json({ message: 'Already clocked out' });
     }
-    if (record.needs_review) {
-      return res.status(403).json({
-        message: 'Your attendance is awaiting admin review. Contact an administrator to resolve it.',
-        needsAdminReview: true,
-      });
-    }
-
     const isRemote = record.clock_in_mode === 'remote';
 
     const tasksCompleted = String(req.body?.tasks_completed || '').trim();
@@ -437,32 +422,10 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     let reason = null;
     const now = new Date();
     let isEarly = false;
-    const clockInAt = todayAt(record.clock_in, '00:00:00');
-    if (now < clockInAt) {
-      return res.status(403).json({ message: 'Clock-out is not available before your clock-in time.' });
-    }
-
     if (!isRemote) {
-      const [settingsRows] = await pool.query(
-        'SELECT work_end, auto_clock_out_grace_minutes, working_days FROM settings WHERE id = 1'
-      );
-      const settings = settingsRows[0] || {};
-      if (!isWorkingDay(now, settings.working_days)) {
-        return res.status(403).json({
-          message: 'Clock-out is not available on a configured non-working day.',
-          outsideWorkDay: true,
-        });
-      }
-      const workEndStr = settings.work_end || '17:00:00';
+      const [settingsRows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
+      const workEndStr = settingsRows[0]?.work_end || '17:00:00';
       const workEnd = todayAt(workEndStr, '17:00:00');
-      const graceMinutes = Number(settings.auto_clock_out_grace_minutes ?? 15);
-      const clockOutDeadline = new Date(workEnd.getTime() + graceMinutes * 60000);
-      if (now >= clockOutDeadline) {
-        return res.status(403).json({
-          message: 'The on-site clock-out window has closed. Your attendance is being sent for admin review.',
-          needsAdminReview: true,
-        });
-      }
       isEarly = now < workEnd;
 
       if (isEarly) {
@@ -485,7 +448,7 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     const [result] = await pool.query(
       `UPDATE attendance
        SET clock_out = ?, early_leave_reason = ?, tasks_completed = ?
-       WHERE id = ? AND clock_out IS NULL AND needs_review = 0`,
+       WHERE id = ? AND clock_out IS NULL`,
       [
         localTimeString(now),
         reason,
@@ -495,9 +458,7 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     );
 
     if (result.affectedRows === 0) {
-      return res.status(409).json({
-        message: 'Attendance changed while clocking out. Refresh and check your attendance status.',
-      });
+      return res.status(400).json({ message: 'Already clocked out' });
     }
 
     logger(`clock-out user=${req.user.id} remote=${isRemote} early=${isEarly}`);
