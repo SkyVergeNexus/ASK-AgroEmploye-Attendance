@@ -61,8 +61,8 @@ export default function AttendanceHistory() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
 
-  const load = useCallback(async (from, to) => {
-    setLoading(true);
+  const load = useCallback(async (from, to, { silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const { data } = await api.get('/attendance/my');
       const fromStr = from.format('YYYY-MM-DD');
@@ -72,10 +72,13 @@ export default function AttendanceHistory() {
         return d >= fromStr && d <= toStr;
       });
       setRows(within);
+      setViewing((current) => current
+        ? within.find((record) => record.id === current.id) || current
+        : current);
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load history');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -83,6 +86,14 @@ export default function AttendanceHistory() {
     load(range[0], range[1]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(
+      () => load(range[0], range[1], { silent: true }),
+      60 * 1000
+    );
+    return () => clearInterval(interval);
+  }, [load, range]);
 
   const applyQuick = (key) => {
     setQuickRange(key);

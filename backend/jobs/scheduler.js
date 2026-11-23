@@ -16,14 +16,21 @@ async function tick() {
     const today = localDateString();
     if (lastRunDate === today) return;
 
-    const [rows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
+    const [rows] = await pool.query(
+      'SELECT work_end, auto_clock_out_grace_minutes FROM settings WHERE id = 1'
+    );
     const workEnd = rows[0]?.work_end || '17:00:00';
+    const configuredGrace = Number(rows[0]?.auto_clock_out_grace_minutes ?? 15);
+    const graceMinutes =
+      Number.isInteger(configuredGrace) && configuredGrace >= 0 && configuredGrace <= 1440
+        ? configuredGrace
+        : 15;
     const [h, m] = String(workEnd).split(':').map(Number);
 
     const now = new Date();
     const trigger = new Date();
     trigger.setHours(h, m, 0, 0);
-    trigger.setMinutes(trigger.getMinutes() + 15); // grace
+    trigger.setMinutes(trigger.getMinutes() + graceMinutes);
 
     if (now >= trigger) {
       const r = await runAutoClockOut();

@@ -139,20 +139,37 @@ export default function Reports() {
     try { const { data } = await api.get('/services'); setServices(data); } catch {}
   }, []);
 
-  const loadAttendance = useCallback(async (from, to) => {
-    setLoading(true);
+  const loadAttendance = useCallback(async (from, to, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const { data } = await api.get('/attendance/all', {
         params: { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD') },
       });
       setAttendanceRows(data);
+      setViewingAttendance((current) => {
+        if (!current) return current;
+        const latest = data.find((record) => record.id === current.id);
+        if (!latest) return current;
+        const changed = [
+          'clock_out',
+          'status',
+          'auto_clocked_out',
+          'needs_review',
+          'admin_resolved',
+          'admin_resolved_by',
+          'admin_resolved_at',
+        ].some((key) => latest[key] !== current[key]);
+        return changed ? { ...current, ...latest } : current;
+      });
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load attendance');
-    } finally { setLoading(false); }
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }, []);
 
-  const loadGuests = useCallback(async (from, to) => {
-    setLoading(true);
+  const loadGuests = useCallback(async (from, to, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const { data } = await api.get('/guests', {
         params: { from: from.format('YYYY-MM-DD'), to: to.format('YYYY-MM-DD') },
@@ -160,12 +177,14 @@ export default function Reports() {
       setGuestRows(data);
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load guests');
-    } finally { setLoading(false); }
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }, []);
 
-  const reload = useCallback(() => {
-    if (mode === 'attendance') loadAttendance(range[0], range[1]);
-    else loadGuests(range[0], range[1]);
+  const reload = useCallback((silent = false) => {
+    if (mode === 'attendance') loadAttendance(range[0], range[1], silent);
+    else loadGuests(range[0], range[1], silent);
   }, [mode, range, loadAttendance, loadGuests]);
 
   useEffect(() => {
@@ -175,8 +194,9 @@ export default function Reports() {
 
   useEffect(() => {
     reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, range]);
+    const interval = setInterval(() => reload(true), 60 * 1000);
+    return () => clearInterval(interval);
+  }, [reload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -660,7 +680,7 @@ export default function Reports() {
           <Text type="secondary">Attendance and guest analytics for any period</Text>
         </div>
         <Space wrap>
-          <Button icon={<ReloadOutlined />} onClick={reload} loading={loading}>
+          <Button icon={<ReloadOutlined />} onClick={() => reload()} loading={loading}>
             {!isMobile && 'Refresh'}
           </Button>
           <Button

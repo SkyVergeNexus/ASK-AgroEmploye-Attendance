@@ -224,6 +224,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   const {
     work_start,
     work_end,
+    auto_clock_out_grace_minutes,
     late_threshold_minutes,
     company_name,
     office_lat,
@@ -250,6 +251,19 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   }
   if (work_start >= work_end) {
     return res.status(400).json({ message: 'Work start must be before work end' });
+  }
+  const graceMinutes =
+    auto_clock_out_grace_minutes === undefined ? 15 : Number(auto_clock_out_grace_minutes);
+  if (
+    auto_clock_out_grace_minutes === null ||
+    auto_clock_out_grace_minutes === '' ||
+    !Number.isInteger(graceMinutes) ||
+    graceMinutes < 0 ||
+    graceMinutes > 1440
+  ) {
+    return res.status(400).json({
+      message: 'Auto clock-out grace period must be a whole number between 0 and 1440 minutes',
+    });
   }
 
   // --- normalize IPs ---
@@ -315,13 +329,15 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   try {
     await pool.query(
       `UPDATE settings
-       SET work_start = ?, work_end = ?, late_threshold_minutes = ?, company_name = ?,
+       SET work_start = ?, work_end = ?, auto_clock_out_grace_minutes = ?,
+           late_threshold_minutes = ?, company_name = ?,
            office_lat = ?, office_lng = ?, geofence_radius_m = ?,
            enforce_location = ?, enforce_network = ?, allowed_ips = ?
        WHERE id = 1`,
       [
         work_start,
         work_end,
+        graceMinutes,
         Number(late_threshold_minutes),
         company_name,
         lat,

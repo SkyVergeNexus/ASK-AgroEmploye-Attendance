@@ -160,6 +160,11 @@ export default function Dashboard() {
   }, [load, checkIp]);
 
   useEffect(() => {
+    const interval = setInterval(load, 60 * 1000);
+    return () => clearInterval(interval);
+  }, [load]);
+
+  useEffect(() => {
     checkIp();
   }, [today, checkIp]);
 
