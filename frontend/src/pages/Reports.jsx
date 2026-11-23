@@ -14,7 +14,7 @@ import dayjs from 'dayjs';
 import api from '../api/axios';
 import { assetUrl } from '../config';
 import AttendanceRecordTag from '../components/AttendanceRecordTag';
-import { attendanceRecordLabel } from '../utils/attendanceRecordLabel';
+import { attendanceClockOutLabel, attendanceRecordLabel } from '../utils/attendanceRecordLabel';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -154,10 +154,14 @@ export default function Reports() {
           'clock_out',
           'status',
           'auto_clocked_out',
+          'auto_clock_out_reason',
           'needs_review',
+          'review_note',
+          'after_close_tracking',
           'admin_resolved',
           'admin_resolved_by',
           'admin_resolved_at',
+          'admin_resolved_reason',
         ].some((key) => latest[key] !== current[key]);
         return changed ? { ...current, ...latest } : current;
       });
@@ -307,13 +311,22 @@ export default function Reports() {
   };
 
   const exportCSV = () => {
-    const headers = ['Date', 'Code', 'Name', 'Gender', 'Department', 'In', 'Out', 'Status', 'Mode', 'Record', 'Note'];
+    const headers = [
+      'Date', 'Code', 'Name', 'Gender', 'Department', 'In', 'Out', 'Status',
+      'Mode', 'Record', 'Admin decision', 'Reviewed at', 'Admin reason',
+      'Auto clock-out reason', 'Note',
+    ];
     const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = filteredAttendance.map((r) => [
       String(r.attendance_date).slice(0, 10),
       r.employee_code, r.full_name, r.gender || '', r.department_name || '',
-      r.clock_in || '', r.clock_out || '', r.status, r.clock_in_mode || 'onsite',
-      attendanceRecordLabel(r), r.notes || '',
+      r.clock_in || '', attendanceClockOutLabel(r), r.status, r.clock_in_mode || 'onsite',
+      attendanceRecordLabel(r),
+      r.admin_resolved ? (r.status === 'absent' ? 'Absent' : 'Present') : '',
+      r.admin_resolved_at ? dayjs(r.admin_resolved_at).format('YYYY-MM-DD HH:mm:ss') : '',
+      r.admin_resolved_reason || '',
+      r.auto_clocked_out ? r.auto_clock_out_reason || 'Departure detected' : '',
+      r.notes || '',
     ].map(cell).join(','));
     const csv = [headers.join(',')].concat(rows).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -337,10 +350,12 @@ export default function Reports() {
           { title: 'Employee', render: (r) => `${r.full_name} (${r.employee_code})` },
           { title: 'Department', render: (r) => r.department_name || '—' },
           { title: 'In', render: (r) => r.clock_in || '—' },
-          { title: 'Out', render: (r) => r.clock_out || '—' },
+          { title: 'Out', render: attendanceClockOutLabel },
           { title: 'Status', render: (r) => STATUS_META[r.status]?.label || r.status },
           { title: 'Mode', render: (r) => r.clock_in_mode === 'remote' ? 'Remote' : 'On-site' },
           { title: 'Record', render: attendanceRecordLabel },
+          { title: 'Reviewed at', render: (r) => r.admin_resolved_at ? dayjs(r.admin_resolved_at).format('DD MMM YYYY HH:mm') : '' },
+          { title: 'Admin reason', render: (r) => r.admin_resolved_reason || '' },
         ],
         rows: filteredAttendance,
         summary: [
@@ -397,7 +412,7 @@ export default function Reports() {
         <Space size={4} wrap>
           <Text strong style={{ color: '#16a34a' }}>{r.clock_in || '—'}</Text>
           <Text type="secondary">→</Text>
-          <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>{r.clock_out || '—'}</Text>
+          <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>{attendanceClockOutLabel(r)}</Text>
           <AttendanceRecordTag record={r} />
         </Space>
       ),
@@ -521,7 +536,7 @@ export default function Reports() {
               <Text strong style={{ color: '#16a34a' }}>{r.clock_in || '—'}</Text>
             </Descriptions.Item>
             <Descriptions.Item label="Clock out">
-              <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>{r.clock_out || '—'}</Text>
+              <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>{attendanceClockOutLabel(r)}</Text>
             </Descriptions.Item>
             <Descriptions.Item label="Status">
               <Tag color={STATUS_META[r.status]?.color || 'default'}>{meta.label}</Tag>
@@ -535,6 +550,28 @@ export default function Reports() {
               <AttendanceRecordTag record={r} />
               {!r.admin_resolved && !r.auto_clocked_out && !r.needs_review && 'Employee clock-out'}
             </Descriptions.Item>
+            {r.admin_resolved && (
+              <>
+                <Descriptions.Item label="Reviewed at">
+                  {r.admin_resolved_at
+                    ? dayjs(r.admin_resolved_at).format('DD MMM YYYY, HH:mm')
+                    : 'Not recorded'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Admin reason" span={2}>
+                  {r.admin_resolved_reason || <Text type="secondary">Not provided</Text>}
+                </Descriptions.Item>
+              </>
+            )}
+            {r.needs_review && (
+              <Descriptions.Item label="Review note" span={2}>
+                {r.review_note || 'Presence could not be verified at closing'}
+              </Descriptions.Item>
+            )}
+            {r.auto_clocked_out && (
+              <Descriptions.Item label="Auto clock-out detail" span={2}>
+                {r.auto_clock_out_reason || 'Departure was detected after closing'}
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label="Department" span={2}>
               {r.department_name || <Text type="secondary">Not assigned</Text>}
             </Descriptions.Item>

@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { verifyToken, isAdmin } = require('../middleware/auth');
 const { notifyAdmins, notifyUser } = require('../helpers/notifications');
+const { normalizeCompanyEmail } = require('../helpers/companyEmail');
 const router = express.Router();
 
 router.get('/', verifyToken, isAdmin, async (req, res) => {
@@ -21,11 +22,17 @@ router.post('/', verifyToken, isAdmin, async (req, res) => {
     employee_code, full_name, email, password, phone,
     gender, department_id, role_id, system_role,
   } = req.body;
+  const mail = normalizeCompanyEmail(email);
+  if (!mail) {
+    return res.status(400).json({
+      message: 'Use an employee email ending in @angelcommoditiesltd.org',
+    });
+  }
   try {
     const hash = await bcrypt.hash(password, 10);
     const [result] = await pool.query(
       'INSERT INTO employees (employee_code, full_name, email, password_hash, phone, gender, department_id, role_id, system_role, is_approved, approval_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)',
-      [employee_code, full_name, email, hash, phone, gender, department_id, role_id, system_role || 'employee', 'approved']
+      [employee_code, full_name, mail, hash, phone, gender, department_id, role_id, system_role || 'employee', 'approved']
     );
     await notifyUser(result.insertId, {
       type: 'employee_created',
@@ -128,10 +135,16 @@ router.put('/:id', verifyToken, isAdmin, async (req, res) => {
     full_name, email, phone, gender,
     department_id, role_id, system_role, is_active,
   } = req.body;
+  const mail = normalizeCompanyEmail(email);
+  if (!mail) {
+    return res.status(400).json({
+      message: 'Use an employee email ending in @angelcommoditiesltd.org',
+    });
+  }
   try {
     await pool.query(
       'UPDATE employees SET full_name=?, email=?, phone=?, gender=?, department_id=?, role_id=?, system_role=?, is_active=? WHERE id=?',
-      [full_name, email, phone, gender, department_id, role_id, system_role, is_active, req.params.id]
+      [full_name, mail, phone, gender, department_id, role_id, system_role, is_active, req.params.id]
     );
     await notifyUser(req.params.id, {
       type: 'employee_profile_updated',

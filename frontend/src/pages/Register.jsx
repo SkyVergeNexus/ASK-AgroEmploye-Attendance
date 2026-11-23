@@ -14,6 +14,7 @@ import { API_ORIGIN, assetUrl } from '../config';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
+const COMPANY_EMAIL_SUFFIX = '@angelcommoditiesltd.org';
 
 const DEFAULT_GRADIENT =
   'linear-gradient(135deg, #065f46 0%, #047857 50%, #065f46 100%)';
@@ -76,7 +77,7 @@ export default function Register() {
   };
 
   const stepFieldMap = {
-    0: ['employee_code', 'full_name', 'email', 'phone'],
+    0: ['employee_code', 'full_name', 'email_local_part', 'phone'],
     1: ['password', 'confirm_password'],
     2: ['gender', 'department_id', 'role_id'],
   };
@@ -99,7 +100,10 @@ export default function Register() {
       const fd = new FormData();
       fd.append('employee_code', (values.employee_code || '').trim());
       fd.append('full_name', (values.full_name || '').trim());
-      fd.append('email', (values.email || '').trim());
+      fd.append(
+        'email',
+        `${(values.email_local_part || '').trim()}${COMPANY_EMAIL_SUFFIX}`
+      );
       fd.append('password', values.password);
       fd.append('confirm_password', values.confirm_password);
       if (values.phone) fd.append('phone', values.phone.trim());
@@ -169,16 +173,20 @@ export default function Register() {
       <Col xs={24}>
         <Form.Item
           label="Email"
-          name="email"
+          name="email_local_part"
           rules={[
-            { required: true, message: 'Email is required' },
-            { type: 'email', message: 'Enter a valid email' },
+            { required: true, message: 'Company email is required' },
+            {
+              pattern: /^[a-z0-9._%+-]+$/i,
+              message: 'Enter only the part before @',
+            },
           ]}
         >
           <Input
             prefix={<MailOutlined style={{ color: '#94a3b8' }} />}
-            placeholder="jane@askagro.com"
-            autoComplete="email"
+            placeholder="wisdom"
+            addonAfter={COMPANY_EMAIL_SUFFIX}
+            autoComplete="username"
           />
         </Form.Item>
       </Col>

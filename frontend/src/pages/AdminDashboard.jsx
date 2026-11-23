@@ -247,6 +247,11 @@ export default function AdminDashboard() {
                   Reviewed by {ev.meta.admin_resolved_by_name}
                 </div>
               )}
+              {ev.meta?.admin_resolved_reason && (
+                <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
+                  Reason: {ev.meta.admin_resolved_reason}
+                </div>
+              )}
             </>
           );
 
@@ -736,7 +741,7 @@ export default function AdminDashboard() {
                   {settings.work_start} – {settings.work_end}
                 </Descriptions.Item>
                 <Descriptions.Item label="Auto clock-out">
-                  After {settings.auto_clock_out_grace_minutes ?? 15} min grace
+                  At detected departure after closing
                 </Descriptions.Item>
                 <Descriptions.Item label="Late After">
                   {settings.late_threshold_minutes} min

@@ -5,6 +5,11 @@ const upload = require('../middleware/upload');
 const { persistUpload } = require('../helpers/imageStorage');
 const { nearestLocality } = require('../helpers/reverseGeocode');
 const { notifyAdmins, notifyUser } = require('../helpers/notifications');
+const {
+  determinePresence,
+  HEARTBEAT_INTERVAL_MS,
+  REQUIRED_OUTSIDE_SAMPLES,
+} = require('../helpers/presenceTracking');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
@@ -75,6 +80,27 @@ function localTimeString(d = new Date()) {
   const m = String(d.getMinutes()).padStart(2, '0');
   const s = String(d.getSeconds()).padStart(2, '0');
   return `${h}:${m}:${s}`;
+}
+
+function localDateTimeString(d = new Date()) {
+  return `${localDateString(d)} ${localTimeString(d)}`;
+}
+
+function parseLocalDateTime(value) {
+  if (value instanceof Date) return value;
+  if (!value) return null;
+  const parsed = new Date(String(value).replace(' ', 'T'));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function databaseDateTimeString(value) {
+  if (value instanceof Date) return localDateTimeString(value);
+  return String(value || '').replace('T', ' ').slice(0, 19);
+}
+
+function databaseTimeString(value) {
+  if (value instanceof Date) return localTimeString(value);
+  return String(value || '').slice(11, 19);
 }
 
 function todayAt(timeString, fallback) {
@@ -503,6 +529,272 @@ router.get('/today', verifyToken, async (req, res) => {
   }
 });
 
+router.get('/presence/active', verifyToken, async (req, res) => {
+  try {
+    const today = localDateString();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const [[rows], [settingsRows]] = await Promise.all([
+      pool.query(
+      `SELECT id, attendance_date
+       FROM attendance
+       WHERE employee_id = ?
+         AND attendance_date BETWEEN ? AND ?
+         AND clock_out IS NULL
+         AND needs_review = 0
+         AND COALESCE(clock_in_mode, 'onsite') = 'onsite'
+       ORDER BY attendance_date DESC
+       LIMIT 1`,
+        [req.user.id, localDateString(yesterday), today]
+      ),
+      pool.query('SELECT enforce_location FROM settings WHERE id = 1'),
+    ]);
+    res.json({
+      active: rows.length > 0,
+      attendance_id: rows[0]?.id || null,
+      track_location: Number(settingsRows[0]?.enforce_location) === 1,
+    });
+  } catch (err) {
+    serverError(res, err, 'active presence tracking');
+  }
+});
+
+router.post('/presence/heartbeat', verifyToken, async (req, res) => {
+  const lat = req.body?.lat == null || req.body.lat === '' ? null : Number(req.body.lat);
+  const lng = req.body?.lng == null || req.body.lng === '' ? null : Number(req.body.lng);
+  if ((lat != null || lng != null) && !isValidCoord(lat, lng)) {
+    return res.status(400).json({ message: 'Location coordinates are invalid' });
+  }
+
+  const now = new Date();
+  const today = localDateString(now);
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const sampleAt = localDateTimeString(now);
+  const clientIp = getClientIp(req);
+  let autoClosed = false;
+  let autoClockOutTime = null;
+  let attendanceId = null;
+  let observedState = 'unknown';
+
+  try {
+    const [settingsRows] = await pool.query(
+      `SELECT enforce_location, enforce_network, office_lat, office_lng,
+              geofence_radius_m, allowed_ips
+       FROM settings WHERE id = 1`
+    );
+    const settings = settingsRows[0] || {};
+    const enforceLocation = Number(settings.enforce_location) === 1;
+    const enforceNetwork = Number(settings.enforce_network) === 1;
+
+    let gpsInside = null;
+    if (
+      enforceLocation &&
+      isValidCoord(lat, lng) &&
+      settings.office_lat != null &&
+      settings.office_lng != null
+    ) {
+      const distance = haversineMeters(
+        lat,
+        lng,
+        Number(settings.office_lat),
+        Number(settings.office_lng)
+      );
+      gpsInside = distance <= Number(settings.geofence_radius_m || 200);
+    }
+
+    const networkInside = enforceNetwork && clientIp
+      ? ipMatchesAllowList(clientIp, settings.allowed_ips)
+      : null;
+    observedState = determinePresence({
+      enforceLocation,
+      enforceNetwork,
+      gpsInside,
+      networkInside,
+    });
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.query(
+        `SELECT id, clock_in_mode, presence_state, presence_last_seen_at,
+                presence_outside_count, presence_outside_since,
+                after_close_tracking
+         FROM attendance
+         WHERE employee_id = ?
+           AND attendance_date BETWEEN ? AND ?
+           AND clock_out IS NULL
+           AND needs_review = 0
+           AND COALESCE(clock_in_mode, 'onsite') = 'onsite'
+         ORDER BY attendance_date DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [req.user.id, localDateString(yesterday), today]
+      );
+      if (!rows.length) {
+        await connection.commit();
+        return res.json({ tracking: false });
+      }
+
+      const record = rows[0];
+      attendanceId = record.id;
+      const lastSeen = parseLocalDateTime(record.presence_last_seen_at);
+      if (
+        lastSeen &&
+        now.getTime() - lastSeen.getTime() < HEARTBEAT_INTERVAL_MS * 0.75
+      ) {
+        await connection.commit();
+        return res.json({
+          tracking: true,
+          state: record.presence_state || 'unknown',
+          throttled: true,
+        });
+      }
+
+      const previousState = record.presence_state || 'unknown';
+      let nextState = previousState;
+      let outsideCount = Number(record.presence_outside_count || 0);
+      let outsideSince = record.presence_outside_since
+        ? databaseDateTimeString(record.presence_outside_since)
+        : null;
+      let eventType = null;
+      let eventAt = sampleAt;
+
+      if (observedState === 'inside') {
+        if (previousState === 'outside') eventType = 'return';
+        else if (previousState === 'unknown') eventType = 'arrival';
+        nextState = 'inside';
+        outsideCount = 0;
+        outsideSince = null;
+      } else if (observedState === 'outside') {
+        if (outsideCount === 0) outsideSince = sampleAt;
+        outsideCount = Math.min(outsideCount + 1, REQUIRED_OUTSIDE_SAMPLES);
+        if (outsideCount >= REQUIRED_OUTSIDE_SAMPLES) {
+          if (previousState !== 'outside') {
+            eventType = 'departure';
+            eventAt = outsideSince || sampleAt;
+          }
+          nextState = 'outside';
+        }
+      } else {
+        nextState = 'unknown';
+        outsideCount = 0;
+        outsideSince = null;
+      }
+
+      if (eventType) {
+        await connection.query(
+          `INSERT INTO attendance_presence_events
+            (attendance_id, event_type, event_at, gps_inside, network_inside,
+             latitude, longitude, client_ip)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            record.id,
+            eventType,
+            eventAt,
+            gpsInside,
+            networkInside,
+            isValidCoord(lat, lng) ? lat : null,
+            isValidCoord(lat, lng) ? lng : null,
+            clientIp,
+          ]
+        );
+      }
+
+      const clockOutAt = databaseTimeString(eventAt);
+      if (
+        eventType === 'departure' &&
+        nextState === 'outside' &&
+        Number(record.after_close_tracking) === 1
+      ) {
+        const [result] = await connection.query(
+          `UPDATE attendance
+           SET presence_state = ?, presence_gps_inside = ?, presence_network_inside = ?,
+               presence_last_seen_at = ?, presence_outside_count = ?,
+               presence_outside_since = ?, clock_out = ?, auto_clocked_out = 1,
+               auto_clock_out_reason = ?, auto_close_time = ?
+           WHERE id = ? AND clock_out IS NULL AND needs_review = 0
+             AND after_close_tracking = 1`,
+          [
+            nextState,
+            gpsInside,
+            networkInside,
+            sampleAt,
+            outsideCount,
+            outsideSince,
+            clockOutAt,
+            'Automatically clocked out at detected departure after closing',
+            clockOutAt,
+            record.id,
+          ]
+        );
+        autoClosed = result.affectedRows > 0;
+        if (autoClosed) autoClockOutTime = clockOutAt;
+      } else {
+        await connection.query(
+          `UPDATE attendance
+           SET presence_state = ?, presence_gps_inside = ?, presence_network_inside = ?,
+               presence_last_seen_at = ?, presence_outside_count = ?,
+               presence_outside_since = ?
+           WHERE id = ? AND clock_out IS NULL AND needs_review = 0`,
+          [
+            nextState,
+            gpsInside,
+            networkInside,
+            sampleAt,
+            outsideCount,
+            outsideSince,
+            record.id,
+          ]
+        );
+      }
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+
+    if (autoClosed) {
+      const employeeName = req.user.name || `Employee #${req.user.id}`;
+      await notifyAdmins({
+        type: 'attendance_auto_clock_out',
+        title: 'Employee left after closing',
+        message: `${employeeName} was clocked out at the detected departure time (${autoClockOutTime}).`,
+        targetPath: '/reports',
+      });
+    }
+
+    res.json({
+      tracking: !autoClosed,
+      auto_clocked_out: autoClosed,
+      attendance_id: attendanceId,
+      state: observedState,
+    });
+  } catch (err) {
+    serverError(res, err, 'presence heartbeat');
+  }
+});
+
+router.get('/presence/:id/events', verifyToken, isAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, event_type,
+              DATE_FORMAT(event_at, '%Y-%m-%d %H:%i:%s') AS event_at,
+              gps_inside, network_inside,
+              latitude, longitude, client_ip
+       FROM attendance_presence_events
+       WHERE attendance_id = ?
+       ORDER BY event_at ASC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    serverError(res, err, 'presence event history');
+  }
+});
+
 // ============================================================
 //  EARLY LEAVE — EMPLOYEE
 // ============================================================
@@ -780,6 +1072,7 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
               a.status, a.clock_in_mode, a.remote_location, a.remote_selfie,
               a.tasks_completed, a.early_leave_reason, a.created_at,
               a.auto_clocked_out, a.admin_resolved, a.admin_resolved_at,
+              a.admin_resolved_reason,
               reviewer.full_name AS admin_resolved_by_name,
               e.full_name, e.employee_code,
               d.name AS department
@@ -863,6 +1156,7 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
             date: attendanceDate,
             status: r.status,
             admin_resolved_by_name: r.admin_resolved_by_name,
+            admin_resolved_reason: r.admin_resolved_reason,
           },
         });
       }
@@ -1065,6 +1359,14 @@ router.get('/needs-review', verifyToken, isAdmin, async (req, res) => {
 // Both close the day, so the record stops nagging the employee.
 router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
   const { decision } = req.body || {};
+  const rawReason = req.body?.reason;
+  if (rawReason != null && typeof rawReason !== 'string') {
+    return res.status(400).json({ message: 'reason must be text' });
+  }
+  const decisionReason = String(rawReason || '').trim();
+  if (decisionReason.length > 2000) {
+    return res.status(400).json({ message: 'Reason must be 2000 characters or fewer' });
+  }
   if (!['present', 'absent'].includes(decision)) {
     return res.status(400).json({ message: 'decision must be present or absent' });
   }
@@ -1101,13 +1403,15 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
            needs_review = 0,
            admin_resolved = 1,
            admin_resolved_by = ?,
-           admin_resolved_at = NOW()
+           admin_resolved_at = NOW(),
+           admin_resolved_reason = ?
        WHERE id = ? AND needs_review = 1
          AND admin_resolved = 0 AND clock_out IS NULL`,
       [
         workEnd,
         newStatus,
         req.user.id,
+        decisionReason || null,
         req.params.id,
       ]
     );

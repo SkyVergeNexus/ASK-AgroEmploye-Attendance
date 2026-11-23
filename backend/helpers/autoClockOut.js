@@ -1,53 +1,10 @@
-// backend/helpers/autoClockOut.js
-//
-// Runs once per day after work_end + grace. For every open on-site
-// attendance row from today:
-//
-//   - If GPS-inside OR IP-allowlisted → auto clock out at work_end
-//   - Otherwise → flag needs_review=1, notify admins, DO NOT close the day
-//
-// Remote rows are skipped (remote workers clock out anytime).
-// Leaves the day open for admin to resolve via the review endpoint.
+// At closing, keep active employees clocked in while they remain on-site.
+// Departures after closing are closed by the presence heartbeat; stale or
+// unverifiable records are sent to admin review.
 
 const pool = require('../config/db');
 const { notifyAdmins } = require('./notifications');
-
-function ipv4ToInt(ip) {
-  const p = String(ip).split('.');
-  if (p.length !== 4) return null;
-  const n = p.map(Number);
-  if (n.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return null;
-  return ((n[0] << 24) >>> 0) + ((n[1] << 16) >>> 0) + ((n[2] << 8) >>> 0) + (n[3] >>> 0);
-}
-
-function ipv4InCidr(ip, entry) {
-  if (!entry) return false;
-  if (!entry.includes('/')) return ip === entry;
-  const [base, bitsStr] = entry.split('/');
-  const bits = Number(bitsStr);
-  if (!Number.isInteger(bits) || bits < 0 || bits > 32) return false;
-  const a = ipv4ToInt(ip), b = ipv4ToInt(base);
-  if (a == null || b == null) return false;
-  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
-  return (a & mask) === (b & mask);
-}
-
-function ipMatchesAllowList(ip, allowedIps) {
-  if (!ip) return false;
-  const entries = String(allowedIps || '').split(',').map((x) => x.trim()).filter(Boolean);
-  return entries.length > 0 && entries.some((e) => ipv4InCidr(ip, e));
-}
-
-function haversineMeters(lat1, lng1, lat2, lng2) {
-  const R = 6371000;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
+const { MAX_HEARTBEAT_AGE_MS } = require('./presenceTracking');
 
 function localDateString(d = new Date()) {
   const y = d.getFullYear();
@@ -56,108 +13,134 @@ function localDateString(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
-function evaluateRow(row, settings) {
-  // Remote workers are never auto-closed — they clock out whenever.
+function localTimeString(d = new Date()) {
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+function toDate(value) {
+  if (value instanceof Date) return value;
+  if (!value) return null;
+  const normalized = String(value).replace(' ', 'T');
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function clockTime(value) {
+  if (value instanceof Date) return localTimeString(value);
+  const text = String(value || '');
+  return text.length >= 19 ? text.slice(11, 19) : text;
+}
+
+function evaluateRow(row, now = new Date(), scheduledCloseAt = null) {
   if (row.clock_in_mode === 'remote') {
-    return { action: 'skip', reason: 'Remote — manual clock-out required' };
+    return { action: 'skip', reason: 'Remote attendance remains manually clocked out' };
   }
 
-  const enforceLoc = Number(settings.enforce_location) === 1;
-  const enforceNet = Number(settings.enforce_network) === 1;
+  const lastSeen = toDate(row.presence_last_seen_at);
+  const isFresh =
+    lastSeen &&
+    now.getTime() >= lastSeen.getTime() &&
+    now.getTime() - lastSeen.getTime() <= MAX_HEARTBEAT_AGE_MS;
 
-  // Neither rule is enforced — can't verify anything. Flag for review.
-  if (!enforceLoc && !enforceNet) {
+  const outsideSince = toDate(row.presence_outside_since);
+  const departureAfterClose =
+    outsideSince &&
+    scheduledCloseAt &&
+    outsideSince.getTime() >= scheduledCloseAt.getTime();
+  if (
+    row.presence_state === 'outside' &&
+    outsideSince &&
+    isFresh &&
+    departureAfterClose
+  ) {
     return {
-      action: 'review',
-      reason: 'Attendance rules are not enforced — cannot verify presence',
+      action: 'auto_close',
+      clockOut: clockTime(row.presence_outside_since),
+      reason: 'Automatically clocked out after leaving the monitored work area',
     };
   }
 
-  let gpsOk = false;
-  let distance = null;
-  if (
-    enforceLoc &&
-    row.clock_in_lat != null &&
-    row.clock_in_lng != null &&
-    settings.office_lat != null &&
-    settings.office_lng != null
-  ) {
-    distance = haversineMeters(
-      Number(row.clock_in_lat),
-      Number(row.clock_in_lng),
-      Number(settings.office_lat),
-      Number(settings.office_lng)
-    );
-    gpsOk = distance <= Number(settings.geofence_radius_m || 200);
+  if (row.presence_state === 'inside' && isFresh) {
+    return { action: 'continue_tracking', reason: null };
   }
 
-  let ipOk = false;
-  if (enforceNet && row.clock_in_ip) {
-    ipOk = ipMatchesAllowList(row.clock_in_ip, settings.allowed_ips);
-  }
-
-  if (gpsOk || ipOk) {
-    const bits = [];
-    if (gpsOk) bits.push(`within ${Math.round(distance)}m of office GPS`);
-    if (ipOk) bits.push('on office Wi-Fi');
+  if (row.after_close_tracking) {
     return {
-      action: 'auto_close',
-      reason: `Auto clocked out — ${bits.join(' and ')}`,
+      action: 'review',
+      reason: 'Location tracking stopped after closing; the departure time could not be verified',
+    };
+  }
+
+  if (row.presence_state === 'outside') {
+    return {
+      action: 'review',
+      reason: 'Employee left before closing and did not return or clock out',
     };
   }
 
   return {
     action: 'review',
-    reason: 'Neither office GPS nor office Wi-Fi matched at close of day',
+    reason: 'Presence could not be verified at scheduled closing time',
   };
 }
 
 async function runAutoClockOut(attendanceDate = localDateString()) {
-
-  const [settingsRows] = await pool.query('SELECT * FROM settings WHERE id = 1');
-  const settings = settingsRows[0] || {};
-  const workEnd = settings.work_end || '17:00:00';
-
+  const [settingsRows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
+  const workEnd = settingsRows[0]?.work_end || '17:00:00';
+  const scheduledCloseAt = toDate(`${attendanceDate} ${String(workEnd).slice(0, 8)}`);
+  const now = new Date();
   const [openRows] = await pool.query(
     `SELECT a.id, a.employee_id, a.clock_in_mode,
-            a.clock_in_lat, a.clock_in_lng, a.clock_in_ip,
+            a.presence_state, a.presence_last_seen_at,
+            a.presence_outside_since, a.after_close_tracking,
             e.full_name
      FROM attendance a
      JOIN employees e ON a.employee_id = e.id
      WHERE a.attendance_date = ?
        AND a.clock_out IS NULL
        AND a.needs_review = 0
+       AND COALESCE(a.clock_in_mode, 'onsite') <> 'remote'
        AND a.status IN ('present', 'late')`,
     [attendanceDate]
   );
 
   if (!openRows.length) {
     console.log(`[auto-clock-out] ${attendanceDate}: no open records`);
-    return { scanned: 0, autoClosed: 0, flagged: 0 };
+    return { scanned: 0, autoClosed: 0, flagged: 0, stillTracking: 0 };
   }
 
   let autoClosed = 0;
   let flagged = 0;
+  let stillTracking = 0;
 
   for (const row of openRows) {
-    const verdict = evaluateRow(row, settings);
+    const verdict = evaluateRow(row, now, scheduledCloseAt);
 
     if (verdict.action === 'auto_close') {
       const [result] = await pool.query(
         `UPDATE attendance
          SET clock_out = ?, auto_clocked_out = 1,
              auto_clock_out_reason = ?, auto_close_time = ?
-         WHERE id = ? AND clock_out IS NULL`,
-        [workEnd, verdict.reason, workEnd, row.id]
+         WHERE id = ? AND clock_out IS NULL AND needs_review = 0`,
+        [verdict.clockOut, verdict.reason, verdict.clockOut, row.id]
       );
-      if (result.affectedRows) {
-        autoClosed++;
-        console.log(`[auto-clock-out] closed user=${row.employee_id} id=${row.id}: ${verdict.reason}`);
-      }
+      if (result.affectedRows) autoClosed++;
+    } else if (verdict.action === 'continue_tracking') {
+      const [result] = await pool.query(
+        `UPDATE attendance
+         SET after_close_tracking = 1
+         WHERE id = ? AND clock_out IS NULL AND needs_review = 0`,
+        [row.id]
+      );
+      if (result.affectedRows) stillTracking++;
     } else if (verdict.action === 'review') {
       const [result] = await pool.query(
-        `UPDATE attendance SET needs_review = 1, review_note = ?
-         WHERE id = ? AND clock_out IS NULL`,
+        `UPDATE attendance
+         SET needs_review = 1, review_note = ?
+         WHERE id = ? AND clock_out IS NULL AND needs_review = 0`,
         [verdict.reason, row.id]
       );
       if (result.affectedRows) {
@@ -165,14 +148,13 @@ async function runAutoClockOut(attendanceDate = localDateString()) {
         console.log(`[auto-clock-out] flagged user=${row.employee_id} id=${row.id}: ${verdict.reason}`);
       }
     }
-    // 'skip' → nothing
   }
 
   if (autoClosed > 0) {
     await notifyAdmins({
       type: 'attendance_auto_clock_out',
       title: 'Auto clock-out ran',
-      message: `${autoClosed} employee${autoClosed === 1 ? '' : 's'} who did not clock out were auto-closed at ${workEnd} after on-site presence was verified.`,
+      message: `${autoClosed} employee${autoClosed === 1 ? '' : 's'} who left after closing were clocked out at their detected departure time.`,
       targetPath: '/reports',
     });
   }
@@ -180,13 +162,14 @@ async function runAutoClockOut(attendanceDate = localDateString()) {
     await notifyAdmins({
       type: 'attendance_needs_review',
       title: `${flagged} record${flagged === 1 ? '' : 's'} need review`,
-      message:
-        'These employees did not clock out and could not be verified. Contact them outside the system, then mark them Present or Absent.',
+      message: 'Employees who were outside the monitored work area or could not be verified at closing need an admin decision.',
       targetPath: '/needs-review',
     });
   }
 
-  return { scanned: openRows.length, autoClosed, flagged };
+  const result = { scanned: openRows.length, autoClosed, flagged, stillTracking, workEnd };
+  console.log(`[auto-clock-out] ${attendanceDate}:`, result);
+  return result;
 }
 
 module.exports = { runAutoClockOut, evaluateRow };

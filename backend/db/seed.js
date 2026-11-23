@@ -1,6 +1,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const bcrypt = require('bcryptjs');
 const mysql = require('mysql2/promise');
+const { normalizeCompanyEmail } = require('../helpers/companyEmail');
 
 const REQUIRED = [
   'DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME',
@@ -12,6 +13,12 @@ for (const k of REQUIRED) {
     console.error(`[seed] missing env var: ${k}`);
     process.exit(1);
   }
+}
+
+const seedAdminEmail = normalizeCompanyEmail(process.env.SEED_ADMIN_EMAIL);
+if (!seedAdminEmail) {
+  console.error('[seed] SEED_ADMIN_EMAIL must end in @angelcommoditiesltd.org');
+  process.exit(1);
 }
 
 const DEPARTMENTS = {
@@ -38,10 +45,10 @@ async function main() {
   const [tables] = await db.query(
     `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
      WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN
-       ('departments','roles','employees','attendance','settings','early_leave_requests')`,
+       ('departments','roles','employees','attendance','settings','early_leave_requests','attendance_presence_events')`,
     [process.env.DB_NAME]
   );
-  if (tables.length < 6) {
+  if (tables.length < 7) {
     console.error('[seed] Required tables missing. Run "npm run db:migrate" first.');
     await db.end();
     process.exit(1);
@@ -74,7 +81,7 @@ async function main() {
     // --- Admin user ---
     const [existing] = await db.query(
       'SELECT id, is_approved FROM employees WHERE email = ?',
-      [process.env.SEED_ADMIN_EMAIL]
+      [seedAdminEmail]
     );
 
     let created = false;
@@ -102,7 +109,7 @@ async function main() {
         [
           process.env.SEED_ADMIN_CODE,
           process.env.SEED_ADMIN_NAME,
-          process.env.SEED_ADMIN_EMAIL,
+          seedAdminEmail,
           hash,
           process.env.SEED_ADMIN_GENDER || null,
           deptId,

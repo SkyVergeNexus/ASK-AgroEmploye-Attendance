@@ -15,6 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import { API_ORIGIN, assetUrl } from '../config';
 
 const { Title, Text } = Typography;
+const COMPANY_EMAIL_SUFFIX = '@angelcommoditiesltd.org';
 
 const DEFAULT_GRADIENT =
   'linear-gradient(135deg, #065f46 0%, #047857 50%, #065f46 100%)';
@@ -46,9 +47,13 @@ export default function Login() {
     : { backgroundImage: DEFAULT_GRADIENT };
 
   const onFinish = async (values) => {
+    const email = `${values.email_local_part.trim()}${COMPANY_EMAIL_SUFFIX}`;
     setBusy(true);
     try {
-      const { data } = await api.post('/auth/login', values);
+      const { data } = await api.post('/auth/login', {
+        email,
+        password: values.password,
+      });
       login(data.token, data.user);
       message.success('Welcome, ' + data.user.name);
       nav(data.user.system_role === 'admin' ? '/admin' : '/dashboard');
@@ -57,7 +62,7 @@ export default function Login() {
       const msg = err.response?.data?.message || 'Login failed';
 
       if (status === 403 && /pending/i.test(msg)) {
-        setPendingEmail(values.email);
+        setPendingEmail(email);
         setPendingOpen(true);
       } else if (status === 403 && /disabled/i.test(msg)) {
         Modal.error({
@@ -117,17 +122,20 @@ export default function Login() {
           size="large"
         >
           <Form.Item
-            name="email"
+            name="email_local_part"
             rules={[
-              { required: true, message: 'Email is required' },
-              { type: 'email', message: 'Enter a valid email' },
+              { required: true, message: 'Company email is required' },
+              {
+                pattern: /^[a-z0-9._%+-]+$/i,
+                message: 'Enter only the part before @',
+              },
             ]}
           >
             <Input
               prefix={<MailOutlined style={{ color: '#94a3b8' }} />}
-              placeholder="Email"
-              type="email"
-              autoComplete="email"
+              placeholder="wisdom"
+              addonAfter={COMPANY_EMAIL_SUFFIX}
+              autoComplete="username"
             />
           </Form.Item>
 

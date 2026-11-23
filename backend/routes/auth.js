@@ -5,6 +5,7 @@ const pool = require('../config/db');
 const upload = require('../middleware/upload');
 const { persistUpload, removeTemporaryUpload } = require('../helpers/imageStorage');
 const { notifyAdmins, notifyUser } = require('../helpers/notifications');
+const { normalizeCompanyEmail } = require('../helpers/companyEmail');
 const router = express.Router();
 
 // ============ REGISTER ============
@@ -59,7 +60,12 @@ router.post('/register', upload.single('picture'), async (req, res) => {
 
     const code = employee_code.trim();
     const name = full_name.trim();
-    const mail = email.trim().toLowerCase();
+    const mail = normalizeCompanyEmail(email);
+    if (!mail) {
+      return res.status(400).json({
+        message: 'Use your company email ending in @angelcommoditiesltd.org',
+      });
+    }
 
     console.log('[register] attempting to insert:', {
       employee_code: code,
@@ -177,6 +183,13 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ message: 'Email and password are required' });
   }
 
+  const mail = normalizeCompanyEmail(email);
+  if (!mail) {
+    return res.status(400).json({
+      message: 'Use your company email ending in @angelcommoditiesltd.org',
+    });
+  }
+
   try {
     const [rows] = await pool.query(
       `SELECT e.*, d.name AS department_name, r.name AS role_name
@@ -184,7 +197,7 @@ router.post('/login', async (req, res) => {
        LEFT JOIN departments d ON e.department_id = d.id
        LEFT JOIN roles r ON e.role_id = r.id
        WHERE e.email = ?`,
-      [email.trim().toLowerCase()]
+      [mail]
     );
 
     if (!rows.length) {

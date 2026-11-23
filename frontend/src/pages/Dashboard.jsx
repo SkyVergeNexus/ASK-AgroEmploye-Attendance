@@ -13,6 +13,7 @@ import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { assetUrl } from '../config';
 import AttendanceRecordTag from '../components/AttendanceRecordTag';
+import { attendanceClockOutLabel } from '../utils/attendanceRecordLabel';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -388,6 +389,7 @@ export default function Dashboard() {
         });
       }
       message.success('Clocked in!');
+      window.dispatchEvent(new Event('attendance:changed'));
       setClockModeOpen(false);
       setRemoteClockInOpen(false);
       setRemoteLocation('');
@@ -438,6 +440,7 @@ export default function Dashboard() {
         hasTasksArg ? { tasks_completed: tasksText } : {}
       );
       message.success('Clocked out!');
+      window.dispatchEvent(new Event('attendance:changed'));
       setRemoteClockOutOpen(false);
       setRemoteTasks([]);
       setTaskInput('');
@@ -535,6 +538,7 @@ export default function Dashboard() {
 
   const networkIsEnforced = ipCheck ? ipEnforced : enforceNetwork;
   const ipAllowed = ipCheck ? ipCheck.allowed !== false : true;
+  const presenceChecksEnabled = enforceLocation || networkIsEnforced;
 
   const scheduleStart = settings ? timeStringToDate(settings.work_start, now) : null;
   const scheduleEnd = settings ? timeStringToDate(settings.work_end, now) : null;
@@ -631,6 +635,22 @@ export default function Dashboard() {
       };
     }
 
+    if (today.needs_review) {
+      return {
+        text: 'Review',
+        hint: 'Your attendance is awaiting an admin decision',
+        active: false,
+      };
+    }
+
+    if (today.after_close_tracking) {
+      return {
+        text: 'Monitoring',
+        hint: 'On-site presence is being monitored until departure',
+        active: false,
+      };
+    }
+
     const remainingMs = workEnd.getTime() - now.getTime();
     if (remainingMs <= 0) {
       return {
@@ -667,9 +687,9 @@ export default function Dashboard() {
       title: 'Clock Out',
       dataIndex: 'clock_out',
       key: 'clock_out',
-      render: (v, r) => (
+      render: (_, r) => (
         <Space size={4}>
-          {v || <Text type="secondary">—</Text>}
+          {v || <Text type="secondary">{attendanceClockOutLabel(r)}</Text>}
           <AttendanceRecordTag record={r} />
           {r.early_leave_reason && (
             <Tag color="orange" style={{ marginLeft: 4 }}>early</Tag>
@@ -1026,6 +1046,17 @@ export default function Dashboard() {
             }
           />
         )}
+        {today && !today.clock_out && today.clock_in_mode !== 'remote' && (
+          <Alert
+            type={presenceChecksEnabled ? 'info' : 'warning'}
+            showIcon
+            style={{ marginBottom: 12 }}
+            title={presenceChecksEnabled ? 'On-site presence monitoring' : 'Presence checks are not configured'}
+            description={presenceChecksEnabled
+              ? 'Keep the employee app open and visible. GPS inside OR the company network match counts as on-site. After closing, a detected departure clocks you out; if you are away at closing or tracking stops, an administrator reviews the record.'
+              : 'Ask an administrator to enable the GPS geofence or office network check. Without either check, the system cannot monitor departure and will send the record for review.'}
+          />
+        )}
 
         {!today && (enforceLocation || networkIsEnforced) && (
           <Alert
@@ -1229,7 +1260,7 @@ export default function Dashboard() {
                     Clock Out
                   </div>
                   <div style={{ fontSize: 18, fontWeight: 700, color: today?.clock_out ? '#065f46' : '#94a3b8' }}>
-                    {today?.clock_out || '—'}
+                    {today ? attendanceClockOutLabel(today) : 'Not recorded'}
                   </div>
                   <AttendanceRecordTag record={today || {}} />
                 </div>
@@ -1294,7 +1325,7 @@ export default function Dashboard() {
             <Col xs={24} sm={8}>
               <Statistic
                 title="Clock Out"
-                value={today?.clock_out || '—'}
+                value={today ? attendanceClockOutLabel(today) : 'Not recorded'}
                 prefix={<LogoutOutlined style={{ color: '#d97706' }} />}
                 styles={{ content: { color: today?.clock_out ? '#065f46' : '#94a3b8' } }}
               />

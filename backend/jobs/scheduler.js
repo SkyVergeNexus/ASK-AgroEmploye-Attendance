@@ -9,33 +9,61 @@ function localDateString(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
+function localDateTimeString(d) {
+  const date = localDateString(d);
+  const time = [
+    String(d.getHours()).padStart(2, '0'),
+    String(d.getMinutes()).padStart(2, '0'),
+    String(d.getSeconds()).padStart(2, '0'),
+  ].join(':');
+  return `${date} ${time}`;
+}
+
 let lastRunDate = null;
+let lastRetentionDate = null;
+
+async function checkOpenPriorDates(today) {
+  const [rows] = await pool.query(
+    `SELECT DISTINCT DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date
+     FROM attendance
+     WHERE attendance_date < ?
+       AND clock_out IS NULL
+       AND needs_review = 0
+       AND COALESCE(clock_in_mode, 'onsite') <> 'remote'
+       AND status IN ('present', 'late')`,
+    [today]
+  );
+  for (const row of rows) {
+    await runAutoClockOut(row.attendance_date);
+  }
+}
 
 async function tick() {
   try {
     const today = localDateString();
+    await checkOpenPriorDates(today);
+    if (lastRetentionDate !== today) {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      await pool.query(
+        'DELETE FROM attendance_presence_events WHERE event_at < ?',
+        [localDateTimeString(cutoff)]
+      );
+      lastRetentionDate = today;
+    }
     if (lastRunDate === today) return;
 
-    const [rows] = await pool.query(
-      'SELECT work_end, auto_clock_out_grace_minutes FROM settings WHERE id = 1'
-    );
+    const [rows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
     const workEnd = rows[0]?.work_end || '17:00:00';
-    const configuredGrace = Number(rows[0]?.auto_clock_out_grace_minutes ?? 15);
-    const graceMinutes =
-      Number.isInteger(configuredGrace) && configuredGrace >= 0 && configuredGrace <= 1440
-        ? configuredGrace
-        : 15;
-    const [h, m] = String(workEnd).split(':').map(Number);
+    const [h, m, s = 0] = String(workEnd).split(':').map(Number);
 
     const now = new Date();
     const trigger = new Date();
-    trigger.setHours(h, m, 0, 0);
-    trigger.setMinutes(trigger.getMinutes() + graceMinutes);
+    trigger.setHours(h, m, s, 0);
 
     if (now >= trigger) {
       const r = await runAutoClockOut();
-      console.log('[scheduler] auto clock-out:', r);
-      lastRunDate = today;
+      if (r.scanned === 0) lastRunDate = today;
     }
   } catch (err) {
     console.error('[scheduler] tick failed:', err.message);

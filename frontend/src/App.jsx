@@ -23,6 +23,7 @@ import LeaveRequests from './pages/LeaveRequests';
 import Notifications from './pages/Notifications';
 import NeedsReview from './pages/NeedsReview';
 import NotificationBell from './components/NotificationBell';
+import AttendancePresenceTracker from './components/AttendancePresenceTracker';
 
 function AppLayout() {
   const { user } = useAuth();
@@ -56,6 +57,7 @@ function AppLayout() {
           <Outlet />
         </main>
       </div>
+      <AttendancePresenceTracker user={user} />
       <NotificationBell />
     </div>
   );

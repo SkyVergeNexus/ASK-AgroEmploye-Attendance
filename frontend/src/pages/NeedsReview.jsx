@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Card, Table, Button, Typography, Space, Modal, message,
-  Row, Col, Alert, Empty, Statistic, Badge, Avatar,
+  Row, Col, Alert, Empty, Statistic, Badge, Avatar, Input, Spin, Timeline,
 } from 'antd';
 import {
   ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, PhoneOutlined,
@@ -18,6 +18,9 @@ export default function NeedsReview() {
   const [viewing, setViewing] = useState(null);
   const [confirming, setConfirming] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [presenceEvents, setPresenceEvents] = useState([]);
+  const [presenceLoading, setPresenceLoading] = useState(false);
+  const [decisionReason, setDecisionReason] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,16 +40,43 @@ export default function NeedsReview() {
     return () => clearInterval(t);
   }, [load]);
 
+  useEffect(() => {
+    if (!viewing) {
+      setPresenceEvents([]);
+      setDecisionReason('');
+      return undefined;
+    }
+
+    let active = true;
+    setPresenceLoading(true);
+    api.get(`/attendance/presence/${viewing.id}/events`)
+      .then(({ data }) => {
+        if (active) setPresenceEvents(data);
+      })
+      .catch((err) => {
+        if (active) message.error(err.response?.data?.message || 'Failed to load presence history');
+      })
+      .finally(() => {
+        if (active) setPresenceLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [viewing]);
+
   const resolve = async (decision) => {
     if (!viewing) return;
     setBusy(true);
     try {
       await api.put(`/attendance/${viewing.id}/resolve-review`, {
         decision,
+        reason: decisionReason.trim() || null,
       });
       message.success(`Marked as ${decision}`);
       setViewing(null);
       setConfirming(null);
+      setDecisionReason('');
       load();
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to resolve');
@@ -142,8 +172,8 @@ export default function NeedsReview() {
         type="warning"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Call the employee to ask why they didn't clock out, then mark them Present or Absent below."
-        description="Do not record the reason in the system — the call is offline. Only store your decision."
+        message="Review the recorded presence history before marking the employee Present or Absent."
+        description="Contact the employee offline if needed. You can record an optional note explaining your decision; calls are not part of the system."
       />
 
       <Row gutter={[12, 12]} className="mb-4">
@@ -262,6 +292,49 @@ export default function NeedsReview() {
               />
             )}
 
+            <Card size="small" title="Recorded presence events">
+              {presenceLoading ? (
+                <Spin />
+              ) : presenceEvents.length ? (
+                <Timeline
+                  items={presenceEvents.map((event) => {
+                    const eventLabel = event.event_type === 'departure'
+                      ? 'Left the monitored area'
+                      : event.event_type === 'return'
+                        ? 'Returned to the monitored area'
+                        : 'Presence first verified';
+                    const gpsLabel = event.gps_inside == null
+                      ? 'GPS unavailable'
+                      : Number(event.gps_inside) ? 'GPS inside' : 'GPS outside';
+                    const networkLabel = event.network_inside == null
+                      ? 'Office network unavailable'
+                      : Number(event.network_inside) ? 'Office network matched' : 'Office network did not match';
+                    return {
+                      color: event.event_type === 'departure' ? 'orange' : 'green',
+                      children: (
+                        <div>
+                          <Text strong>{eventLabel}</Text>
+                          <div>{dayjs(event.event_at).format('DD MMM YYYY, HH:mm:ss')}</div>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            {gpsLabel} · {networkLabel}
+                          </Text>
+                          {event.latitude != null && event.longitude != null && (
+                            <div>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                GPS: {Number(event.latitude).toFixed(5)}, {Number(event.longitude).toFixed(5)}
+                              </Text>
+                            </div>
+                          )}
+                        </div>
+                      ),
+                    };
+                  })}
+                />
+              ) : (
+                <Text type="secondary">No boundary events were recorded while the employee app was active.</Text>
+              )}
+            </Card>
+
           </Space>
         )}
       </Modal>
@@ -276,11 +349,20 @@ export default function NeedsReview() {
         onCancel={() => setConfirming(null)}
         onOk={() => resolve(confirming)}
       >
-        <Text>
-          Confirm marking {viewing?.full_name || 'this employee'} as {confirming}.
-          Their clock-out will be recorded at the normal closing time, and the decision
-          will update both employee history and admin reports.
-        </Text>
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <Text>
+            Confirm marking {viewing?.full_name || 'this employee'} as {confirming}.
+            The decision and timestamp will be recorded in attendance history.
+          </Text>
+          <Input.TextArea
+            value={decisionReason}
+            onChange={(event) => setDecisionReason(event.target.value)}
+            placeholder="Reason (optional)"
+            maxLength={2000}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+            showCount
+          />
+        </Space>
       </Modal>
 
     </div>

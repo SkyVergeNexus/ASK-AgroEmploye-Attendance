@@ -224,7 +224,6 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   const {
     work_start,
     work_end,
-    auto_clock_out_grace_minutes,
     late_threshold_minutes,
     company_name,
     office_lat,
@@ -251,19 +250,6 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   }
   if (work_start >= work_end) {
     return res.status(400).json({ message: 'Work start must be before work end' });
-  }
-  const graceMinutes =
-    auto_clock_out_grace_minutes === undefined ? 15 : Number(auto_clock_out_grace_minutes);
-  if (
-    auto_clock_out_grace_minutes === null ||
-    auto_clock_out_grace_minutes === '' ||
-    !Number.isInteger(graceMinutes) ||
-    graceMinutes < 0 ||
-    graceMinutes > 1440
-  ) {
-    return res.status(400).json({
-      message: 'Auto clock-out grace period must be a whole number between 0 and 1440 minutes',
-    });
   }
   // --- normalize IPs ---
   const rawEntries = String(allowed_ips || '')
@@ -328,7 +314,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   try {
     await pool.query(
       `UPDATE settings
-       SET work_start = ?, work_end = ?, auto_clock_out_grace_minutes = ?,
+       SET work_start = ?, work_end = ?,
            late_threshold_minutes = ?, company_name = ?,
            office_lat = ?, office_lng = ?, geofence_radius_m = ?,
            enforce_location = ?, enforce_network = ?, allowed_ips = ?
@@ -336,7 +322,6 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
       [
         work_start,
         work_end,
-        graceMinutes,
         Number(late_threshold_minutes),
         company_name,
         lat,
@@ -350,14 +335,6 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
     const [rows] = await pool.query('SELECT * FROM settings WHERE id = 1');
     res.json(rows[0]);
   } catch (err) {
-    if (
-      err.code === 'ER_BAD_FIELD_ERROR' &&
-      String(err.message).includes('auto_clock_out_grace_minutes')
-    ) {
-      return res.status(503).json({
-        message: 'Database migration 019 is pending. Run npm run db:migrate, then restart the backend.',
-      });
-    }
     res.status(500).json({ message: err.message });
   }
 });

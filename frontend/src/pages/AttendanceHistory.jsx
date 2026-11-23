@@ -12,6 +12,7 @@ import isoWeek from 'dayjs/plugin/isoWeek';
 import api from '../api/axios';
 import { assetUrl } from '../config';
 import AttendanceRecordTag from '../components/AttendanceRecordTag';
+import { attendanceClockOutLabel } from '../utils/attendanceRecordLabel';
 
 dayjs.extend(isoWeek);
 
@@ -154,9 +155,9 @@ export default function AttendanceHistory() {
       title: 'Clock Out',
       dataIndex: 'clock_out',
       key: 'clock_out',
-      render: (v, r) => (
+      render: (_, r) => (
         <Space size={4}>
-          {v || <Text type="secondary">—</Text>}
+          {v || <Text type="secondary">{attendanceClockOutLabel(r)}</Text>}
           <AttendanceRecordTag record={r} />
           {r.early_leave_reason && (
             <Tag color="orange" style={{ marginLeft: 4 }}>early</Tag>
@@ -373,7 +374,7 @@ export default function AttendanceHistory() {
             </Descriptions.Item>
             <Descriptions.Item label="Clock out">
               <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>
-                {r.clock_out || '—'}
+                {attendanceClockOutLabel(r)}
               </Text>
             </Descriptions.Item>
             <Descriptions.Item label="Status">
@@ -390,6 +391,28 @@ export default function AttendanceHistory() {
               <AttendanceRecordTag record={r} />
               {!r.admin_resolved && !r.auto_clocked_out && !r.needs_review && 'Employee clock-out'}
             </Descriptions.Item>
+            {r.admin_resolved && (
+              <>
+                <Descriptions.Item label="Reviewed at">
+                  {r.admin_resolved_at
+                    ? dayjs(r.admin_resolved_at).format('DD MMM YYYY, HH:mm')
+                    : 'Not recorded'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Admin reason" span={2}>
+                  {r.admin_resolved_reason || <Text type="secondary">Not provided</Text>}
+                </Descriptions.Item>
+              </>
+            )}
+            {r.needs_review && (
+              <Descriptions.Item label="Review note" span={2}>
+                {r.review_note || 'Presence could not be verified at closing'}
+              </Descriptions.Item>
+            )}
+            {r.auto_clocked_out && (
+              <Descriptions.Item label="Auto clock-out detail" span={2}>
+                {r.auto_clock_out_reason || 'Departure was detected after closing'}
+              </Descriptions.Item>
+            )}
             {r.status === 'leave' && (
               <Descriptions.Item label="Attendance note" span={2}>
                 {r.notes || 'Approved leave'}

@@ -74,7 +74,6 @@ export default function Settings() {
         company_name: data.company_name,
         work_start: dayjs(data.work_start, 'HH:mm:ss'),
         work_end: dayjs(data.work_end, 'HH:mm:ss'),
-        auto_clock_out_grace_minutes: data.auto_clock_out_grace_minutes ?? 15,
         late_threshold_minutes: data.late_threshold_minutes,
         office_lat: data.office_lat ? Number(data.office_lat) : null,
         office_lng: data.office_lng ? Number(data.office_lng) : null,
@@ -202,7 +201,6 @@ export default function Settings() {
         company_name: values.company_name,
         work_start: values.work_start.format('HH:mm:ss'),
         work_end: values.work_end.format('HH:mm:ss'),
-        auto_clock_out_grace_minutes: values.auto_clock_out_grace_minutes,
         late_threshold_minutes: values.late_threshold_minutes,
         office_lat: values.office_lat,
         office_lng: values.office_lng,
@@ -227,7 +225,7 @@ export default function Settings() {
           System Settings
         </Title>
         <Text type="secondary">
-          Work hours, auto clock-out grace, late threshold, branding, and location
+          Work hours, late threshold, branding, and location
         </Text>
       </div>
 
@@ -243,11 +241,13 @@ export default function Settings() {
             On-site clock-ins follow the checks below
             when their switches are ON.
             Remote clock-ins require a selfie and GPS location and are only
-            accepted during the configured work hours. At closing, open on-site
-            records are checked after the grace period below: only employees
-            verified by office GPS or Wi-Fi are auto-clocked out. Other records
-            are sent to admin review. Early on-site clock-outs require admin
-            approval; remote employees can clock out when their work is complete.
+            accepted during the configured work hours. On-site presence is
+            monitored while the employee app is open. After closing, employees
+            who remain verified on-site stay clocked in until their departure is
+            detected; employees outside the monitored area or unverifiable at
+            closing are sent to admin review. Early on-site clock-outs require
+            admin approval;
+            remote employees can clock out when their work is complete.
           </>
         }
       />
@@ -292,23 +292,6 @@ export default function Settings() {
                 <TimePicker format="HH:mm" use12Hours={false} style={{ width: '100%' }} />
               </Form.Item>
             </div>
-
-            <Form.Item
-              label="Auto Clock-Out Grace Period (minutes)"
-              name="auto_clock_out_grace_minutes"
-              extra="After work end, wait this many minutes before checking open on-site records. Set to 15 for the standard quarter-hour grace."
-              rules={[
-                { required: true, message: 'Auto clock-out grace period is required' },
-                {
-                  type: 'number',
-                  min: 0,
-                  max: 1440,
-                  message: 'Enter a whole number from 0 to 1440 minutes',
-                },
-              ]}
-            >
-              <InputNumber min={0} max={1440} precision={0} style={{ width: '100%' }} />
-            </Form.Item>
 
             <Form.Item
               label="Late Threshold (minutes after work start)"
