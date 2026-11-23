@@ -35,10 +35,10 @@ function localDateString(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
-function timeStringToDate(hms) {
+function timeStringToDate(hms, reference = new Date()) {
   if (!hms) return null;
   const [h, m, s = 0] = String(hms).split(':').map(Number);
-  const d = new Date();
+  const d = new Date(reference);
   d.setHours(h, m, s, 0);
   return d;
 }
@@ -536,12 +536,59 @@ export default function Dashboard() {
   const networkIsEnforced = ipCheck ? ipEnforced : enforceNetwork;
   const ipAllowed = ipCheck ? ipCheck.allowed !== false : true;
 
-  const canClockIn = !today;
+  const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const workingDays = String(settings?.working_days ?? '1,2,3,4,5')
+    .split(',')
+    .map(Number)
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+  const workingDaysLabel = workingDays.map((day) => weekdayNames[day]).join(', ');
+  const isScheduledWorkday = workingDays.includes(now.getDay());
+  const scheduleStart = settings ? timeStringToDate(settings.work_start, now) : null;
+  const scheduleEnd = settings ? timeStringToDate(settings.work_end, now) : null;
+  const graceMinutes = Number(settings?.auto_clock_out_grace_minutes ?? 15);
+  const onsiteClockOutDeadline = scheduleEnd
+    ? scheduleEnd.getTime() + graceMinutes * 60 * 1000
+    : null;
+  const canClockIn = Boolean(
+    !today &&
+    isScheduledWorkday &&
+    scheduleStart &&
+    scheduleEnd &&
+    now >= scheduleStart &&
+    now <= scheduleEnd
+  );
   const canClockInOnsite =
     canClockIn &&
     (!enforceLocation || !locationBlocked) &&
     (!networkIsEnforced || ipAllowed);
-  const canClockOut = today && !today.clock_out && !pendingEarly;
+  const isRemoteToday = today?.clock_in_mode === 'remote';
+  const canClockOut = Boolean(
+    today &&
+    !today.clock_out &&
+    !pendingEarly &&
+    (isRemoteToday ||
+      (isScheduledWorkday &&
+        onsiteClockOutDeadline != null &&
+        now.getTime() < onsiteClockOutDeadline))
+  );
+  const clockInUnavailableReason = !today && settings
+    ? !isScheduledWorkday
+      ? `Clock-in is unavailable today. Scheduled working days: ${workingDaysLabel}.`
+      : now < scheduleStart
+        ? `Clock-in opens at ${String(settings.work_start).slice(0, 5)}.`
+        : now > scheduleEnd
+          ? `The clock-in window closed at ${String(settings.work_end).slice(0, 5)}.`
+          : null
+    : null;
+  const clockOutUnavailableReason = today && !today.clock_out && !canClockOut
+    ? today.needs_review
+      ? 'Your attendance is awaiting admin review.'
+      : !isRemoteToday && onsiteClockOutDeadline != null && now.getTime() >= onsiteClockOutDeadline
+        ? 'The on-site clock-out window has closed. Your attendance will be finalized through admin review.'
+        : !isRemoteToday && !isScheduledWorkday
+          ? `Today is not a scheduled working day (${workingDaysLabel}).`
+          : null
+    : null;
 
   const picUrl = assetUrl(user?.profile_picture);
 
@@ -556,8 +603,8 @@ export default function Dashboard() {
   const countdown = useMemo(() => {
     if (!settings) return { text: '—', hint: 'Loading settings…', active: false };
 
-    const workEnd = timeStringToDate(settings.work_end);
-    const workStart = timeStringToDate(settings.work_start);
+    const workEnd = scheduleEnd;
+    const workStart = scheduleStart;
     if (!workEnd || !workStart) {
       return { text: '—', hint: 'No work hours set', active: false };
     }
@@ -567,6 +614,23 @@ export default function Dashboard() {
     }
 
     if (!today?.clock_in) {
+      if (!isScheduledWorkday) {
+        return { text: '—', hint: `Not a scheduled workday · ${workingDaysLabel}`, active: false };
+      }
+      if (now < workStart) {
+        return {
+          text: '—',
+          hint: `Clock-in opens at ${String(settings.work_start).slice(0, 5)}`,
+          active: false,
+        };
+      }
+      if (now > workEnd) {
+        return {
+          text: '—',
+          hint: `Clock-in closed at ${String(settings.work_end).slice(0, 5)}`,
+          active: false,
+        };
+      }
       return { text: '00:00:00', hint: 'Starts when you clock in', active: false };
     }
 
@@ -602,21 +666,24 @@ export default function Dashboard() {
       };
     }
 
-    const remainingMs = workEnd - now;
+    const closeDeadline = workEnd.getTime() + graceMinutes * 60 * 1000;
+    const remainingMs = closeDeadline - now.getTime();
     if (remainingMs <= 0) {
       return {
         text: '00:00:00',
-        hint: 'Past closing — on-site attendance is being finalized',
+        hint: 'Auto clock-out window elapsed — attendance is awaiting finalization',
         active: false,
       };
     }
 
     return {
       text: formatDuration(remainingMs),
-      hint: `Until ${settings.work_end}`,
+      hint: now >= workEnd
+        ? `Auto clock-out check after ${graceMinutes} min grace`
+        : `Until ${String(settings.work_end).slice(0, 5)} + ${graceMinutes} min grace`,
       active: true,
     };
-  }, [settings, today, now, pendingEarly]);
+  }, [settings, today, now, pendingEarly, isScheduledWorkday, scheduleStart, scheduleEnd, workingDaysLabel, graceMinutes]);
 
   const columns = [
     {
@@ -924,6 +991,24 @@ export default function Dashboard() {
           </Button>
         }
       >
+        {clockInUnavailableReason && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            title={clockInUnavailableReason}
+            description={`Your administrator's schedule is ${workingDaysLabel}, ${String(settings.work_start).slice(0, 5)}–${String(settings.work_end).slice(0, 5)}.`}
+          />
+        )}
+        {clockOutUnavailableReason && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            title={clockOutUnavailableReason}
+          />
+        )}
+
         {!today && networkIsEnforced && ipCheck && (
           <>
             {ipCheck.allowed ? (
@@ -1355,7 +1440,7 @@ export default function Dashboard() {
               <WifiOutlined style={{ color: '#15803d', fontSize: 22 }} />
               <Text strong>On-site</Text>
               <Text type="secondary" style={{ minHeight: 40 }}>
-                Clock in using the usual office attendance process.
+                Clock in during the configured workdays and hours using the usual office checks.
               </Text>
               <Button
                 block
@@ -1367,7 +1452,9 @@ export default function Dashboard() {
               </Button>
               {!canClockInOnsite && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  {networkIsEnforced && !ipAllowed
+                  {clockInUnavailableReason
+                    ? clockInUnavailableReason
+                    : networkIsEnforced && !ipAllowed
                     ? 'You must be on the office Wi-Fi network.'
                     : enforceLocation && locationBlocked
                     ? 'You must be within the office GPS radius.'
@@ -1386,6 +1473,7 @@ export default function Dashboard() {
               <Button
                 type="primary"
                 block
+                disabled={!canClockIn}
                 loading={clocking}
                 onClick={() => {
                   setClockModeOpen(false);
@@ -1394,6 +1482,11 @@ export default function Dashboard() {
               >
                 Clock in remotely
               </Button>
+              {!canClockIn && clockInUnavailableReason && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {clockInUnavailableReason}
+                </Text>
+              )}
             </Space>
           </Card>
         </div>
@@ -1427,7 +1520,7 @@ export default function Dashboard() {
             title="Remote attendance check"
             description={
               settings?.work_start && settings?.work_end
-                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live selfie. Fresh GPS coordinates are captured with the selfie and saved with the attendance record.`
+                ? `Remote clock-in is available on ${workingDaysLabel} from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live selfie. Fresh GPS coordinates are captured with the selfie and saved with the attendance record.`
                 : 'Enter your work location, allow GPS, and take a live selfie during working hours. Fresh GPS coordinates are captured with the selfie and saved with the attendance record.'
             }
           />

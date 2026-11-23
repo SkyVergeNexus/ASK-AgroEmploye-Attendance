@@ -27,6 +27,7 @@ import {
 import api from '../api/axios';
 
 const { Title, Text } = Typography;
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const getTodayKey = () => {
   const d = new Date();
@@ -417,13 +418,17 @@ export default function AdminDashboard() {
               {needsReviewCount} missed clock-out{needsReviewCount === 1 ? '' : 's'} need review
             </Text>
           }
-          description="Call the employee, then mark them Present or Absent. Their day is still open until you decide."
-          action={
-            <Link to="/needs-review">
-              <Button type="primary" size="small" icon={<ArrowRightOutlined />}>
-                Review &amp; confirm
-              </Button>
-            </Link>
+          description={
+            <div>
+              <div>
+                Call the employee, then mark them Present or Absent. Their day is still open until you decide.
+              </div>
+              <Link to="/needs-review" style={{ display: 'block', marginTop: 10 }}>
+                <Button type="primary" icon={<ArrowRightOutlined />}>
+                  Review missed clock-outs ({needsReviewCount})
+                </Button>
+              </Link>
+            </div>
           }
         />
       )}
@@ -734,6 +739,16 @@ export default function AdminDashboard() {
                 </Descriptions.Item>
                 <Descriptions.Item label="Work Hours">
                   {settings.work_start} – {settings.work_end}
+                </Descriptions.Item>
+                <Descriptions.Item label="Working Days">
+                  {String(settings.working_days ?? '1,2,3,4,5')
+                    .split(',')
+                    .map((day) => WEEKDAY_NAMES[Number(day)])
+                    .filter(Boolean)
+                    .join(', ')}
+                </Descriptions.Item>
+                <Descriptions.Item label="Auto clock-out">
+                  After {settings.auto_clock_out_grace_minutes ?? 15} min grace
                 </Descriptions.Item>
                 <Descriptions.Item label="Late After">
                   {settings.late_threshold_minutes} min

@@ -16,8 +16,8 @@ export default function NeedsReview() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewing, setViewing] = useState(null);
-  const [confirming, setConfirming] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [resolvingId, setResolvingId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,25 +37,63 @@ export default function NeedsReview() {
     return () => clearInterval(t);
   }, [load]);
 
-  const resolve = async (decision) => {
-    if (!viewing) return;
+  const resolve = async (row, decision) => {
+    if (!row) return;
     setBusy(true);
+    setResolvingId(row.id);
     try {
-      await api.put(`/attendance/${viewing.id}/resolve-review`, {
+      await api.put(`/attendance/${row.id}/resolve-review`, {
         decision,
       });
       message.success(`Marked as ${decision}`);
       setViewing(null);
-      setConfirming(null);
       load();
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to resolve');
     } finally {
       setBusy(false);
+      setResolvingId(null);
     }
   };
 
   const columns = [
+    {
+      title: 'Decision',
+      key: 'actions',
+      width: 170,
+      fixed: 'left',
+      render: (_, r) => (
+        <Space direction="vertical" size={4}>
+          <Button
+            type="primary"
+            size="small"
+            icon={<CheckCircleOutlined />}
+            loading={busy && resolvingId === r.id}
+            disabled={busy}
+            onClick={() => resolve(r, 'present')}
+          >
+            Mark present
+          </Button>
+          <Button
+            danger
+            size="small"
+            icon={<CloseCircleOutlined />}
+            disabled={busy}
+            onClick={() => resolve(r, 'absent')}
+          >
+            Mark absent
+          </Button>
+          <Button
+            size="small"
+            type="link"
+            style={{ paddingInline: 0, height: 24 }}
+            onClick={() => setViewing(r)}
+          >
+            Contact details
+          </Button>
+        </Space>
+      ),
+    },
     {
       title: 'Date',
       dataIndex: 'attendance_date',
@@ -97,24 +135,6 @@ export default function NeedsReview() {
         </Text>
       ),
     },
-    {
-      title: '',
-      key: 'actions',
-      width: 110,
-      align: 'right',
-      render: (_, r) => (
-        <Button
-          size="small"
-          type="primary"
-          ghost
-          onClick={() => {
-            setViewing(r);
-          }}
-        >
-          Review
-        </Button>
-      ),
-    },
   ];
 
   const summary = useMemo(() => ({
@@ -142,8 +162,8 @@ export default function NeedsReview() {
         type="warning"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Call the employee to ask why they didn't clock out, then mark them Present or Absent below."
-        description="Do not record the reason in the system — the call is offline. Only store your decision."
+        message="Call the employee first, then choose Mark present or Mark absent in the first column."
+        description="Your choice is saved immediately. Do not record the reason in the system — the call is offline."
       />
 
       <Row gutter={[12, 12]} className="mb-4">
@@ -174,7 +194,7 @@ export default function NeedsReview() {
           dataSource={rows}
           loading={loading}
           pagination={{ pageSize: 15, showSizeChanger: true }}
-          scroll={{ x: 'max-content' }}
+          scroll={{ x: 900 }}
           locale={{ emptyText: <Empty description="Nothing to review — all caught up" /> }}
         />
       </Card>
@@ -182,18 +202,15 @@ export default function NeedsReview() {
       <Modal
         open={!!viewing}
         title="Resolve missed clock-out"
-        onCancel={() => {
-          setViewing(null);
-          setConfirming(null);
-        }}
+        onCancel={() => setViewing(null)}
         footer={
           <Space wrap style={{ width: '100%', justifyContent: 'flex-end' }}>
-            <Button onClick={() => { setViewing(null); setConfirming(null); }}>Cancel</Button>
+            <Button onClick={() => setViewing(null)}>Close</Button>
             <Button
               danger
               icon={<CloseCircleOutlined />}
               disabled={busy}
-              onClick={() => setConfirming('absent')}
+              onClick={() => resolve(viewing, 'absent')}
             >
               Mark absent
             </Button>
@@ -201,7 +218,7 @@ export default function NeedsReview() {
               type="primary"
               icon={<CheckCircleOutlined />}
               disabled={busy}
-              onClick={() => setConfirming('present')}
+              onClick={() => resolve(viewing, 'present')}
             >
               Mark present
             </Button>
@@ -266,22 +283,6 @@ export default function NeedsReview() {
         )}
       </Modal>
 
-      <Modal
-        open={!!confirming}
-        title="Confirm attendance decision"
-        centered
-        okText={confirming === 'absent' ? 'Confirm absent' : 'Confirm present'}
-        cancelText="Go back"
-        confirmLoading={busy}
-        onCancel={() => setConfirming(null)}
-        onOk={() => resolve(confirming)}
-      >
-        <Text>
-          Confirm marking {viewing?.full_name || 'this employee'} as {confirming}.
-          Their clock-out will be recorded at the normal closing time, and the decision
-          will update both employee history and admin reports.
-        </Text>
-      </Modal>
     </div>
   );
 }

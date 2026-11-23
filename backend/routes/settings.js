@@ -224,6 +224,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   const {
     work_start,
     work_end,
+    working_days,
     auto_clock_out_grace_minutes,
     late_threshold_minutes,
     company_name,
@@ -264,6 +265,21 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
     return res.status(400).json({
       message: 'Auto clock-out grace period must be a whole number between 0 and 1440 minutes',
     });
+  }
+  let workingDaysValue = null;
+  if (working_days !== undefined) {
+    if (
+      !Array.isArray(working_days) ||
+      working_days.length === 0 ||
+      working_days.some((day) => day == null || String(day).trim() === '')
+    ) {
+      return res.status(400).json({ message: 'Select at least one working day' });
+    }
+    const days = working_days.map(Number);
+    if (days.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {
+      return res.status(400).json({ message: 'Working days must be valid weekdays' });
+    }
+    workingDaysValue = Array.from(new Set(days)).sort((a, b) => a - b).join(',');
   }
 
   // --- normalize IPs ---
@@ -330,6 +346,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
     await pool.query(
       `UPDATE settings
        SET work_start = ?, work_end = ?, auto_clock_out_grace_minutes = ?,
+           working_days = COALESCE(?, working_days),
            late_threshold_minutes = ?, company_name = ?,
            office_lat = ?, office_lng = ?, geofence_radius_m = ?,
            enforce_location = ?, enforce_network = ?, allowed_ips = ?
@@ -338,6 +355,7 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
         work_start,
         work_end,
         graceMinutes,
+        workingDaysValue,
         Number(late_threshold_minutes),
         company_name,
         lat,
@@ -353,10 +371,10 @@ router.put('/', verifyToken, isAdmin, async (req, res) => {
   } catch (err) {
     if (
       err.code === 'ER_BAD_FIELD_ERROR' &&
-      String(err.message).includes('auto_clock_out_grace_minutes')
+      /auto_clock_out_grace_minutes|working_days/.test(String(err.message))
     ) {
       return res.status(503).json({
-        message: 'Database migration 019 is pending. Run npm run db:migrate, then restart the backend.',
+        message: 'Attendance settings migrations are pending. Run npm run db:migrate, then restart the backend.',
       });
     }
     res.status(500).json({ message: err.message });
