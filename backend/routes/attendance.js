@@ -778,44 +778,57 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
     // ---- 1. Employee attendance (clock-in + clock-out) ----
     const [attendance] = await pool.query(
       `SELECT a.id, a.employee_id, a.attendance_date, a.clock_in, a.clock_out,
+              DATE_FORMAT(a.attendance_date, '%Y-%m-%d') AS attendance_date_key,
+              DATE_FORMAT(a.admin_resolved_at, '%Y-%m-%d') AS admin_resolved_date,
               a.status, a.clock_in_mode, a.remote_location, a.remote_selfie,
               a.tasks_completed, a.early_leave_reason, a.created_at,
+              a.auto_clocked_out, a.admin_resolved, a.admin_resolved_at,
+              reviewer.full_name AS admin_resolved_by_name,
               e.full_name, e.employee_code,
               d.name AS department
        FROM attendance a
        JOIN employees e ON a.employee_id = e.id
+       LEFT JOIN employees reviewer ON a.admin_resolved_by = reviewer.id
        LEFT JOIN departments d ON e.department_id = d.id
-       WHERE a.attendance_date >= ? AND a.attendance_date <= ?`,
-      [from, to]
+       WHERE (a.attendance_date >= ? AND a.attendance_date <= ?)
+          OR (DATE(a.admin_resolved_at) >= ? AND DATE(a.admin_resolved_at) <= ?)`,
+      [from, to, from, to]
     );
 
     attendance.forEach((r) => {
-      events.push({
-        id: `att-in-${r.id}`,
-        kind: 'clock-in',
-        at: r.created_at,
-        employee: {
-          id: r.employee_id,
-          full_name: r.full_name,
-          employee_code: r.employee_code,
-          department: r.department,
-        },
-        meta: {
-          attendance_id: r.id,
-          time: r.clock_in,
-          date: String(r.attendance_date).slice(0, 10),
-          status: r.status,
-          mode: r.clock_in_mode,
-          remote_location: r.remote_location,
-          remote_selfie: r.remote_selfie,
-        },
-      });
+      const attendanceDate = r.attendance_date_key;
+      const attendanceInRange = attendanceDate >= from && attendanceDate <= to;
+      const resolvedDate = r.admin_resolved_date;
+      const reviewInRange = resolvedDate && resolvedDate >= from && resolvedDate <= to;
 
-      if (r.clock_out) {
+      if (attendanceInRange) {
+        events.push({
+          id: `att-in-${r.id}`,
+          kind: 'clock-in',
+          at: r.created_at,
+          employee: {
+            id: r.employee_id,
+            full_name: r.full_name,
+            employee_code: r.employee_code,
+            department: r.department,
+          },
+          meta: {
+            attendance_id: r.id,
+            time: r.clock_in,
+            date: attendanceDate,
+            status: r.status,
+            mode: r.clock_in_mode,
+            remote_location: r.remote_location,
+            remote_selfie: r.remote_selfie,
+          },
+        });
+      }
+
+      if (attendanceInRange && r.clock_out && !r.admin_resolved) {
         events.push({
           id: `att-out-${r.id}`,
           kind: 'clock-out',
-          at: buildTimestamp(r.attendance_date, r.clock_out) || r.created_at,
+          at: buildTimestamp(attendanceDate, r.clock_out) || r.created_at,
           employee: {
             id: r.employee_id,
             full_name: r.full_name,
@@ -825,11 +838,34 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
           meta: {
             attendance_id: r.id,
             time: r.clock_out,
-            date: String(r.attendance_date).slice(0, 10),
+            date: attendanceDate,
             mode: r.clock_in_mode,
             early: Boolean(r.early_leave_reason),
             early_reason: r.early_leave_reason,
             tasks_completed: r.tasks_completed,
+            auto_clocked_out: Boolean(r.auto_clocked_out),
+            admin_resolved: Boolean(r.admin_resolved),
+            status: r.status,
+          },
+        });
+      }
+
+      if (reviewInRange) {
+        events.push({
+          id: `att-review-${r.id}`,
+          kind: 'attendance-review',
+          at: r.admin_resolved_at,
+          employee: {
+            id: r.employee_id,
+            full_name: r.full_name,
+            employee_code: r.employee_code,
+            department: r.department,
+          },
+          meta: {
+            attendance_id: r.id,
+            date: attendanceDate,
+            status: r.status,
+            admin_resolved_by_name: r.admin_resolved_by_name,
           },
         });
       }
@@ -998,6 +1034,103 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
     });
   } catch (err) {
     serverError(res, err, 'stats');
+  }
+});
+
+// ═════════════════════════════════════════════════════════
+//  ADMIN REVIEW — flagged auto-clock-out records
+// ═════════════════════════════════════════════════════════
+
+// GET /attendance/needs-review
+router.get('/needs-review', verifyToken, isAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT a.*, e.full_name, e.employee_code, e.email, e.phone,
+              d.name AS department
+       FROM attendance a
+       JOIN employees e ON a.employee_id = e.id
+       LEFT JOIN departments d ON e.department_id = d.id
+       WHERE a.needs_review = 1
+         AND a.admin_resolved = 0
+         AND a.clock_out IS NULL
+       ORDER BY a.attendance_date DESC, e.full_name`
+    );
+    res.json(rows);
+  } catch (err) {
+    serverError(res, err, 'needs-review');
+  }
+});
+
+// PUT /attendance/:id/resolve-review
+// Body: { decision: 'present' | 'absent' }
+// - present → close at work_end with status 'present' (or keep 'late')
+// - absent  → close at work_end, status = 'absent'
+// Both close the day, so the record stops nagging the employee.
+router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
+  const { decision } = req.body || {};
+  if (!['present', 'absent'].includes(decision)) {
+    return res.status(400).json({ message: 'decision must be present or absent' });
+  }
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, employee_id, attendance_date,
+              DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date_key,
+              clock_in,
+              status, needs_review, admin_resolved
+       FROM attendance WHERE id = ?`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Record not found' });
+    const r = rows[0];
+    if (r.admin_resolved || !r.needs_review) {
+      return res.status(400).json({ message: 'This attendance record is not awaiting review' });
+    }
+
+    const [settingsRows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
+    const workEnd = settingsRows[0]?.work_end || '17:00:00';
+
+    // 'late' stays 'late' — admin is only confirming presence, not changing timing.
+    const newStatus =
+      decision === 'absent' ? 'absent' :
+      (r.status === 'late' ? 'late' : 'present');
+
+    const [result] = await pool.query(
+      `UPDATE attendance
+       SET clock_out = ?,
+           auto_clocked_out = 0,
+           auto_clock_out_reason = NULL,
+           auto_close_time = NULL,
+           status = ?,
+           needs_review = 0,
+           admin_resolved = 1,
+           admin_resolved_by = ?,
+           admin_resolved_at = NOW()
+       WHERE id = ? AND needs_review = 1
+         AND admin_resolved = 0 AND clock_out IS NULL`,
+      [
+        workEnd,
+        newStatus,
+        req.user.id,
+        req.params.id,
+      ]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(400).json({ message: 'This attendance record has already been resolved' });
+    }
+
+    await notifyUser(r.employee_id, {
+      type: 'attendance_admin_decision',
+      title: decision === 'present' ? 'Your day was marked Present' : 'Your day was marked Absent',
+      message:
+        decision === 'present'
+          ? `Admin has reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as present.`
+          : `Admin reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as absent.`,
+      targetPath: '/dashboard',
+    });
+
+    res.json({ message: 'Resolved', status: newStatus });
+  } catch (err) {
+    serverError(res, err, 'resolve-review');
   }
 });
 

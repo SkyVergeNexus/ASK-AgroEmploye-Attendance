@@ -304,7 +304,12 @@ router.post('/test', verifyToken, isAdmin, async (req, res) => {
     }
     res.json({ message: `Test email sent to ${admins[0].email}.` });
   } catch (error) {
-    console.error('[email settings] email test failed:', error.message);
+    const causeCode = error.cause?.code;
+    console.error('[email settings] email test failed:', {
+      code: error.code || null,
+      causeCode: causeCode || null,
+      message: error.message,
+    });
     if (error.code === 'ER_BAD_FIELD_ERROR') {
       return res.status(503).json({
         message: 'Email sender storage is not up to date. Restart the backend with npm start to run migrations.',
@@ -333,9 +338,27 @@ router.post('/test', verifyToken, isAdmin, async (req, res) => {
         message: 'Gmail authorization expired or was revoked. Reconnect the Gmail sender.',
       });
     }
+    if (error.code === 'invalid_client') {
+      return res.status(503).json({
+        message: 'Google rejected the OAuth client credentials. Verify the client ID and secret in the backend environment, then reconnect Gmail.',
+      });
+    }
     if (error.code === 'GMAIL_API_HTTP_401' || error.code === 'GMAIL_API_HTTP_403') {
       return res.status(502).json({
         message: 'Google rejected the Gmail API request. Confirm Gmail API is enabled and reconnect with the Gmail send permission.',
+      });
+    }
+    if (error.code === 'GMAIL_API_HTTP_400') {
+      const detail = String(error.message || '')
+        .replace(/[\r\n]+/g, ' ')
+        .slice(0, 240);
+      return res.status(502).json({
+        message: `Gmail rejected the test message${detail ? `: ${detail}` : '.'}`,
+      });
+    }
+    if (/^GMAIL_API_HTTP_(429|5\d\d)$/.test(error.code || '')) {
+      return res.status(502).json({
+        message: 'The Gmail API is temporarily unavailable or rate-limited. Wait briefly, then try the test again.',
       });
     }
     if (error.code === 'EAUTH' || error.responseCode === 535) {
@@ -348,8 +371,19 @@ router.post('/test', verifyToken, isAdmin, async (req, res) => {
         message: 'The SMTP connection closed before login. For Gmail, try port 465 with implicit TLS enabled.',
       });
     }
+    const networkCode = error.code || causeCode;
+    if (['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'].includes(networkCode)) {
+      return res.status(502).json({
+        message: `The backend could not connect to the email provider (${networkCode}). Check the Render logs and provider connection settings.`,
+      });
+    }
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return res.status(502).json({
+        message: 'The email provider request timed out. Check Render outbound connectivity and try again.',
+      });
+    }
     res.status(502).json({
-      message: 'Email test failed. Check the selected delivery method and its configuration.',
+      message: `Email test failed${error.code ? ` (${error.code})` : ''}. Check the Render backend log for "[email settings] email test failed" and verify the selected delivery method.`,
     });
   } finally {
     if (transporter) transporter.close();

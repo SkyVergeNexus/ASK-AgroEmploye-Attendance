@@ -22,6 +22,7 @@ import {
   CheckOutlined,
   CloseOutlined,
   SolutionOutlined,
+  ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 
@@ -58,11 +59,12 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [feedFilter, setFeedFilter] = useState('all');
+  const [needsReviewCount, setNeedsReviewCount] = useState(0);
 
   const load = useCallback(async (dateKey) => {
     setLoading(true);
     try {
-      const [statsRes, settingsRes, earlyRes, activityRes, guestStatsRes] =
+      const [statsRes, settingsRes, earlyRes, activityRes, guestStatsRes, needsReviewRes] =
         await Promise.all([
           api.get('/attendance/stats'),
           api.get('/settings'),
@@ -71,6 +73,7 @@ export default function AdminDashboard() {
             params: { from: dateKey, to: dateKey, limit: 150 },
           }),
           api.get('/guests/stats'),
+          api.get('/attendance/needs-review'),
         ]);
 
       setStats(statsRes.data);
@@ -78,6 +81,7 @@ export default function AdminDashboard() {
       setEarlyRequests(earlyRes.data || []);
       setActivity(activityRes.data || []);
       setGuestStats(guestStatsRes.data || { total: 0, today: 0, week: 0 });
+      setNeedsReviewCount((needsReviewRes.data || []).length);
       setLastUpdated(new Date());
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load dashboard');
@@ -110,7 +114,7 @@ export default function AdminDashboard() {
     let filtered = activity;
     if (feedFilter === 'clock') {
       filtered = activity.filter(
-        (e) => e.kind === 'clock-in' || e.kind === 'clock-out'
+        (e) => e.kind === 'clock-in' || e.kind === 'clock-out' || e.kind === 'attendance-review'
       );
     } else if (feedFilter === 'early') {
       filtered = activity.filter((e) => e.kind.startsWith('early'));
@@ -141,7 +145,19 @@ export default function AdminDashboard() {
         case 'clock-in':
           return <div style={{ ...baseStyle, background: '#ecfdf5', color: '#16a34a' }}><LoginOutlined /></div>;
         case 'clock-out':
-          return <div style={{ ...baseStyle, background: '#fffbeb', color: '#d97706' }}><LogoutOutlined /></div>;
+          return (
+            <div
+              style={{
+                ...baseStyle,
+                background: ev.meta?.admin_resolved ? '#f0fdf4' : '#fffbeb',
+                color: ev.meta?.admin_resolved ? '#15803d' : '#d97706',
+              }}
+            >
+              {ev.meta?.admin_resolved ? <CheckOutlined /> : <LogoutOutlined />}
+            </div>
+          );
+        case 'attendance-review':
+          return <div style={{ ...baseStyle, background: '#eff6ff', color: '#2563eb' }}><CheckCircleOutlined /></div>;
         case 'early-request':
           return <div style={{ ...baseStyle, background: '#fef3c7', color: '#b45309' }}><ClockCircleOutlined /></div>;
         case 'early-approved':
@@ -185,7 +201,10 @@ export default function AdminDashboard() {
           return (
             <>
               <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
-                <strong>{name}</strong> clocked out
+                <strong>{name}</strong>
+                {ev.meta?.admin_resolved
+                  ? ev.meta.status === 'absent' ? ' was marked absent by admin' : ' was confirmed present by admin'
+                  : ev.meta?.auto_clocked_out ? ' was auto clocked out' : ' clocked out'}
                 {ev.meta?.early && (
                   <> <Tag color="orange" style={{ marginLeft: 4, fontSize: 10 }}>Early</Tag></>
                 )}
@@ -194,9 +213,38 @@ export default function AdminDashboard() {
                 {ev.meta?.time}
                 {ev.employee?.employee_code ? ` · ${ev.employee.employee_code}` : ''}
               </div>
+              {ev.meta?.admin_resolved && (
+                <Tag color="green" style={{ marginTop: 3 }}>
+                  Admin review · {ev.meta.status}
+                </Tag>
+              )}
+              {ev.meta?.auto_clocked_out && (
+                <Tag color="blue" style={{ marginTop: 3 }}>Auto clock-out</Tag>
+              )}
               {ev.meta?.early_reason && (
                 <div style={{ fontSize: 11, color: '#92400e', marginTop: 3, fontStyle: 'italic' }}>
                   "{ev.meta.early_reason}"
+                </div>
+              )}
+            </>
+          );
+
+        case 'attendance-review':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong> was marked {ev.meta?.status === 'absent' ? 'absent' : 'present'} by admin
+                {ev.meta?.status === 'late' && (
+                  <> <Tag color="gold" style={{ marginLeft: 4, fontSize: 10 }}>Late</Tag></>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                Attendance date {ev.meta?.date}
+                {ev.employee?.employee_code ? ` · ${ev.employee.employee_code}` : ''}
+              </div>
+              {ev.meta?.admin_resolved_by_name && (
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                  Reviewed by {ev.meta.admin_resolved_by_name}
                 </div>
               )}
             </>
@@ -358,6 +406,28 @@ export default function AdminDashboard() {
         />
       )}
 
+      {needsReviewCount > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<ExclamationCircleOutlined />}
+          style={{ marginBottom: 16 }}
+          message={
+            <Text strong>
+              {needsReviewCount} missed clock-out{needsReviewCount === 1 ? '' : 's'} need review
+            </Text>
+          }
+          description="Call the employee, then mark them Present or Absent. Their day is still open until you decide."
+          action={
+            <Link to="/needs-review">
+              <Button type="primary" size="small" icon={<ArrowRightOutlined />}>
+                Review &amp; confirm
+              </Button>
+            </Link>
+          }
+        />
+      )}
+
       {/* ═══════════════ STAT CARDS ═══════════════
           Cleaner layout: 5 cards on desktop,
           2×2 on tablet, stacked on phone.
@@ -441,6 +511,35 @@ export default function AdminDashboard() {
           </Card>
         </Col>
       </Row>
+
+      {/* ── Reports button — sits right under the stat cards ── */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          marginBottom: 24,
+          marginTop: -8,
+        }}
+      >
+        <Link to="/reports">
+          <Button
+            type="primary"
+            icon={<FileTextOutlined />}
+            size="large"
+            style={{
+              background: 'linear-gradient(135deg, #065f46 0%, #047857 100%)',
+              border: 'none',
+              borderRadius: 10,
+              height: 44,
+              paddingInline: 20,
+              fontWeight: 600,
+              boxShadow: '0 6px 16px rgba(6, 95, 70, 0.22)',
+            }}
+          >
+            View Reports
+          </Button>
+        </Link>
+      </div>
 
       <Row gutter={[16, 16]}>
         {/* ═══════════════ RECENT ACTIVITIES ═══════════════
@@ -683,9 +782,19 @@ export default function AdminDashboard() {
                   Departments & Roles
                 </Button>
               </Link>
-              <Link to="/reports">
-                <Button block icon={<FileTextOutlined />}>
-                  View Reports
+              <Link to="/needs-review">
+                <Button
+                  block
+                  icon={<ExclamationCircleOutlined />}
+                  danger={needsReviewCount > 0}
+                >
+                  Missed Clock-Outs
+                  {needsReviewCount > 0 && (
+                    <Badge
+                      count={needsReviewCount}
+                      style={{ marginLeft: 6, backgroundColor: '#d97706' }}
+                    />
+                  )}
                 </Button>
               </Link>
             </Space>

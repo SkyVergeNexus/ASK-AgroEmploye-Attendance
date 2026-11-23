@@ -21,6 +21,7 @@ import Guests from './pages/Guests';
 import Services from './pages/Services';
 import LeaveRequests from './pages/LeaveRequests';
 import Notifications from './pages/Notifications';
+import NeedsReview from './pages/NeedsReview';
 import NotificationBell from './components/NotificationBell';
 
 function AppLayout() {
@@ -84,6 +85,7 @@ function Shell() {
         <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
         <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
         <Route path="/early-leave" element={<AdminRoute><EarlyLeaveRequests /></AdminRoute>} />
+        <Route path="/needs-review" element={<AdminRoute><NeedsReview /></AdminRoute>} />
         <Route path="/leave-requests/admin" element={<AdminRoute><LeaveRequests admin /></AdminRoute>} />
         <Route path="/employees" element={<AdminRoute><Employees /></AdminRoute>} />
         <Route path="/services" element={<AdminRoute><Services /></AdminRoute>} />

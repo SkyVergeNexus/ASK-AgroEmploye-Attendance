@@ -12,6 +12,7 @@ import {
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { assetUrl } from '../config';
+import AttendanceRecordTag from '../components/AttendanceRecordTag';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -567,7 +568,15 @@ export default function Dashboard() {
     if (today.clock_out) {
       return {
         text: '00:00:00',
-        hint: today.early_leave_reason ? 'Left early — reason recorded' : 'Day complete',
+        hint: today.admin_resolved
+          ? today.status === 'absent'
+            ? 'Admin marked you absent'
+            : today.status === 'late'
+              ? 'Admin confirmed your attendance (late)'
+              : 'Admin marked you present'
+          : today.auto_clocked_out
+            ? `Automatically clocked out at ${today.clock_out}`
+            : today.early_leave_reason ? 'Left early — reason recorded' : 'Day complete',
         active: false,
       };
     }
@@ -580,11 +589,19 @@ export default function Dashboard() {
       };
     }
 
+    if (today.clock_in_mode === 'remote') {
+      return {
+        text: 'Flexible',
+        hint: 'Remote — clock out when your work is complete',
+        active: false,
+      };
+    }
+
     const remainingMs = workEnd - now;
     if (remainingMs <= 0) {
       return {
         text: '00:00:00',
-        hint: 'Past closing — please clock out',
+        hint: 'Past closing — on-site attendance is being finalized',
         active: false,
       };
     }
@@ -619,6 +636,7 @@ export default function Dashboard() {
       render: (v, r) => (
         <Space size={4}>
           {v || <Text type="secondary">—</Text>}
+          <AttendanceRecordTag record={r} />
           {r.early_leave_reason && (
             <Tag color="orange" style={{ marginLeft: 4 }}>early</Tag>
           )}
@@ -710,6 +728,7 @@ export default function Dashboard() {
           >
             {r.clock_out || '—'}
           </div>
+          <AttendanceRecordTag record={r} />
         </div>
       </div>
 
@@ -1169,6 +1188,7 @@ export default function Dashboard() {
                   <div style={{ fontSize: 18, fontWeight: 700, color: today?.clock_out ? '#065f46' : '#94a3b8' }}>
                     {today?.clock_out || '—'}
                   </div>
+                  <AttendanceRecordTag record={today || {}} />
                 </div>
               </div>
             </div>
@@ -1235,6 +1255,7 @@ export default function Dashboard() {
                 prefix={<LogoutOutlined style={{ color: '#d97706' }} />}
                 styles={{ content: { color: today?.clock_out ? '#065f46' : '#94a3b8' } }}
               />
+              {today && <AttendanceRecordTag record={today} />}
             </Col>
             <Col xs={24} sm={8}>
               <Statistic

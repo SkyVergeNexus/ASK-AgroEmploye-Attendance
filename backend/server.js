@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 const { downloadLocalities } = require('./scripts/downloadLocalities');
+const { startScheduler } = require('./jobs/scheduler');
 
 const app = express();
 
@@ -24,7 +25,7 @@ app.use('/api/roles', require('./routes/roles'));
 app.use('/api/profile', require('./routes/profile'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/guests', require('./routes/guests'));
-app.use('/api/services', require('./routes/services'));   // ← NEW
+app.use('/api/services', require('./routes/services'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/email-settings', require('./routes/emailSettings'));
 
@@ -66,6 +67,12 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () =>
     console.log('Server on http://localhost:' + PORT)
   );
+
+  try {
+    startScheduler();
+  } catch (error) {
+    console.error('[scheduler] failed to start:', error.message);
+  }
 }
 
 startServer();
