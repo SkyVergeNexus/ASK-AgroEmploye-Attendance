@@ -13,6 +13,11 @@ const {
 const fs = require('fs');
 const router = express.Router();
 
+// The attendance.presence_state column is NOT NULL, so we must never write
+// NULL to it. 'unknown' is the neutral value (used for remote workers and
+// after clock-out / admin resolution).
+const DEFAULT_PRESENCE_STATE = 'unknown';
+
 // ============================================================
 //  HELPERS
 // ============================================================
@@ -221,6 +226,20 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
   };
 
   try {
+    // Make sure the account from the token still exists. Without this, a stale
+    // token (deleted employee) causes the attendance_ibfk_1 foreign key error.
+    const [employeeRows] = await pool.query(
+      'SELECT id FROM employees WHERE id = ?',
+      [req.user.id]
+    );
+    if (!employeeRows.length) {
+      await removeUploadedSelfie();
+      return res.status(401).json({
+        message: 'Your account could not be found. Please log in again.',
+        sessionInvalid: true,
+      });
+    }
+
     const [existing] = await pool.query(
       'SELECT id, status FROM attendance WHERE employee_id = ? AND attendance_date = ?',
       [req.user.id, today]
@@ -353,6 +372,8 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     const diffMin = (now - workStart) / 60000;
     const status = diffMin > lateThreshold ? 'late' : 'present';
 
+    // FIX: presence_state is NOT NULL, so it always gets a value ('unknown'),
+    // for remote workers too. presence_last_seen_at is only set for on-site.
     await pool.query(
       `INSERT INTO attendance
         (employee_id, attendance_date, clock_in, status,
@@ -373,20 +394,27 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
         mode,
         remoteLocation,
         remoteSelfie,
-        mode === 'onsite' ? 'unknown' : null,
+        DEFAULT_PRESENCE_STATE,
         mode === 'onsite' ? localDateTimeString(now) : null,
       ]
     );
     selfieSaved = true;
 
     logger(`clock-in user=${req.user.id} mode=${mode} method=${method} status=${status}`);
-    const employeeName = req.user.full_name || `Employee #${req.user.id}`;
-    await notifyAdmins({
-      type: 'attendance_clock_in',
-      title: 'Employee clocked in',
-      message: `${employeeName} clocked in ${mode === 'remote' ? 'remotely' : 'on-site'} (${status}).`,
-      targetPath: '/reports',
-    });
+
+    // Notifications must never make a successful clock-in look like a failure
+    // (email delivery has been timing out on the server).
+    try {
+      const employeeName = req.user.full_name || `Employee #${req.user.id}`;
+      await notifyAdmins({
+        type: 'attendance_clock_in',
+        title: 'Employee clocked in',
+        message: `${employeeName} clocked in ${mode === 'remote' ? 'remotely' : 'on-site'} (${status}).`,
+        targetPath: '/reports',
+      });
+    } catch (notifyErr) {
+      console.warn('[attendance] clock-in notification failed:', notifyErr.message);
+    }
 
     res.json({
       message: 'Clocked in',
@@ -507,13 +535,14 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       }
     }
 
+    // FIX: presence_state is NOT NULL, so reset it to 'unknown' instead of NULL.
     const [result] = await pool.query(
       `UPDATE attendance
        SET clock_out = ?,
            early_leave_reason = ?,
            tasks_completed = ?,
            after_close_tracking = 0,
-           presence_state = NULL,
+           presence_state = ?,
            presence_outside_count = 0,
            presence_outside_since = NULL
        WHERE id = ? AND clock_out IS NULL`,
@@ -521,6 +550,7 @@ router.post('/clock-out', verifyToken, async (req, res) => {
         localTimeString(now),
         reason,
         isRemote ? tasksCompleted : null,
+        DEFAULT_PRESENCE_STATE,
         record.id,
       ]
     );
@@ -530,13 +560,17 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     }
 
     logger(`clock-out user=${req.user.id} remote=${isRemote} early=${isEarly}`);
-    const employeeName = req.user.full_name || `Employee #${req.user.id}`;
-    await notifyAdmins({
-      type: 'attendance_clock_out',
-      title: 'Employee clocked out',
-      message: `${employeeName} clocked out${isEarly ? ' early' : ''}.`,
-      targetPath: '/reports',
-    });
+    try {
+      const employeeName = req.user.full_name || `Employee #${req.user.id}`;
+      await notifyAdmins({
+        type: 'attendance_clock_out',
+        title: 'Employee clocked out',
+        message: `${employeeName} clocked out${isEarly ? ' early' : ''}.`,
+        targetPath: '/reports',
+      });
+    } catch (notifyErr) {
+      console.warn('[attendance] clock-out notification failed:', notifyErr.message);
+    }
     res.json({ message: 'Clocked out' });
   } catch (err) {
     serverError(res, err, 'clock-out');
@@ -747,7 +781,11 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
 
       // after_close_tracking is purely informational now — no auto clock-out.
       const nextAfterClose =
-        pastClosing && nextState === 'inside' ? 1 : Number(record.after_close_tracking) === 1 && nextState === 'inside' ? 1 : 0;
+        pastClosing && nextState === 'inside'
+          ? 1
+          : Number(record.after_close_tracking) === 1 && nextState === 'inside'
+            ? 1
+            : 0;
 
       await connection.query(
         `UPDATE attendance
@@ -852,19 +890,23 @@ router.post('/early-leave/request', verifyToken, async (req, res) => {
     );
 
     logger(`early-leave request user=${req.user.id}`);
-    const employeeName = req.user.full_name || `Employee #${req.user.id}`;
-    await notifyUser(req.user.id, {
-      type: 'early_leave_request_received',
-      title: 'Early-leave request received',
-      message: 'Your early-leave request was submitted and is waiting for admin review.',
-      targetPath: '/leave-requests',
-    });
-    await notifyAdmins({
-      type: 'early_leave_request',
-      title: 'Early-leave request submitted',
-      message: `${employeeName} requested to leave early today.`,
-      targetPath: '/early-leave',
-    });
+    try {
+      const employeeName = req.user.full_name || `Employee #${req.user.id}`;
+      await notifyUser(req.user.id, {
+        type: 'early_leave_request_received',
+        title: 'Early-leave request received',
+        message: 'Your early-leave request was submitted and is waiting for admin review.',
+        targetPath: '/leave-requests',
+      });
+      await notifyAdmins({
+        type: 'early_leave_request',
+        title: 'Early-leave request submitted',
+        message: `${employeeName} requested to leave early today.`,
+        targetPath: '/early-leave',
+      });
+    } catch (notifyErr) {
+      console.warn('[attendance] early-leave notification failed:', notifyErr.message);
+    }
     res.status(201).json({ message: 'Request submitted. Awaiting admin approval.' });
   } catch (err) {
     serverError(res, err, 'early-leave request');
@@ -935,18 +977,22 @@ router.put('/early-leave/:id/decide', verifyToken, isAdmin, async (req, res) => 
       [req.params.id]
     );
     if (requestRows.length) {
-      await notifyUser(requestRows[0].employee_id, {
-        type: 'early_leave_decision',
-        title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
-        message: `Your early-leave request was ${approve ? 'approved' : 'rejected'}.${admin_note ? ` Admin note: ${String(admin_note).trim()}` : ''}`,
-        targetPath: '/leave-requests',
-      });
-      await notifyAdmins({
-        type: 'early_leave_decision',
-        title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
-        message: `Employee #${requestRows[0].employee_id}'s early-leave request was ${approve ? 'approved' : 'rejected'}.`,
-        targetPath: '/early-leave',
-      });
+      try {
+        await notifyUser(requestRows[0].employee_id, {
+          type: 'early_leave_decision',
+          title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
+          message: `Your early-leave request was ${approve ? 'approved' : 'rejected'}.${admin_note ? ` Admin note: ${String(admin_note).trim()}` : ''}`,
+          targetPath: '/leave-requests',
+        });
+        await notifyAdmins({
+          type: 'early_leave_decision',
+          title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
+          message: `Employee #${requestRows[0].employee_id}'s early-leave request was ${approve ? 'approved' : 'rejected'}.`,
+          targetPath: '/early-leave',
+        });
+      } catch (notifyErr) {
+        console.warn('[attendance] early-leave decision notification failed:', notifyErr.message);
+      }
     }
     res.json({ message: approve ? 'Approved' : 'Rejected' });
   } catch (err) {
@@ -1323,25 +1369,29 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
            admin_resolved_by = ?,
            admin_resolved_at = NOW(),
            admin_resolved_reason = ?,
-           presence_state = 'unknown',
+           presence_state = ?,
            after_close_tracking = 0
        WHERE id = ? AND needs_review = 1
          AND admin_resolved = 0 AND clock_out IS NULL`,
-      [workEnd, newStatus, req.user.id, decisionReason || null, req.params.id]
+      [workEnd, newStatus, req.user.id, decisionReason || null, DEFAULT_PRESENCE_STATE, req.params.id]
     );
     if (result.affectedRows === 0) {
       return res.status(400).json({ message: 'This attendance record has already been resolved' });
     }
 
-    await notifyUser(r.employee_id, {
-      type: 'attendance_admin_decision',
-      title: decision === 'present' ? 'Your day was marked Present' : 'Your day was marked Absent',
-      message:
-        decision === 'present'
-          ? `Admin has reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as present.`
-          : `Admin reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as absent.`,
-      targetPath: '/dashboard',
-    });
+    try {
+      await notifyUser(r.employee_id, {
+        type: 'attendance_admin_decision',
+        title: decision === 'present' ? 'Your day was marked Present' : 'Your day was marked Absent',
+        message:
+          decision === 'present'
+            ? `Admin has reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as present.`
+            : `Admin reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as absent.`,
+        targetPath: '/dashboard',
+      });
+    } catch (notifyErr) {
+      console.warn('[attendance] review notification failed:', notifyErr.message);
+    }
 
     res.json({ message: 'Resolved', status: newStatus });
   } catch (err) {
