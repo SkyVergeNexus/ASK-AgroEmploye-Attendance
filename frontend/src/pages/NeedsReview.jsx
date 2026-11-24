@@ -12,6 +12,8 @@ import api from '../api/axios';
 
 const { Title, Text } = Typography;
 
+const FALLBACK_REASON = 'Did not clock out within 24 hours of clock-in';
+
 export default function NeedsReview() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -46,23 +48,15 @@ export default function NeedsReview() {
       setDecisionReason('');
       return undefined;
     }
-
     let active = true;
     setPresenceLoading(true);
     api.get(`/attendance/presence/${viewing.id}/events`)
-      .then(({ data }) => {
-        if (active) setPresenceEvents(data);
-      })
+      .then(({ data }) => { if (active) setPresenceEvents(data); })
       .catch((err) => {
         if (active) message.error(err.response?.data?.message || 'Failed to load presence history');
       })
-      .finally(() => {
-        if (active) setPresenceLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
+      .finally(() => { if (active) setPresenceLoading(false); });
+    return () => { active = false; };
   }, [viewing]);
 
   const resolve = async (decision) => {
@@ -96,9 +90,7 @@ export default function NeedsReview() {
           size="small"
           type="primary"
           ghost
-          onClick={() => {
-            setViewing(r);
-          }}
+          onClick={() => setViewing(r)}
         >
           Review
         </Button>
@@ -132,25 +124,44 @@ export default function NeedsReview() {
       title: 'Clocked in',
       dataIndex: 'clock_in',
       key: 'clock_in',
-      width: 110,
-      render: (v) => v || '—',
+      width: 170,
+      render: (v, r) => {
+        if (!v) return '—';
+        return (
+          <div>
+            <div style={{ fontWeight: 600 }}>{v}</div>
+            <div style={{ fontSize: 11, color: '#64748b' }}>
+              {String(r.attendance_date).slice(0, 10)}
+            </div>
+          </div>
+        );
+      },
     },
     {
       title: 'Why it was flagged',
-      dataIndex: 'review_note',
-      key: 'review_note',
+      dataIndex: 'auto_clock_out_reason',
+      key: 'auto_clock_out_reason',
       render: (v) => (
         <Text type="secondary" style={{ fontSize: 12 }}>
-          {v || 'Could not be verified at close of day'}
+          {v || FALLBACK_REASON}
         </Text>
       ),
     },
   ];
 
-  const summary = useMemo(() => ({
-    count: rows.length,
-    oldest: rows.length ? rows[rows.length - 1].attendance_date : null,
-  }), [rows]);
+  const summary = useMemo(() => {
+    const oldest = rows.reduce((min, r) => {
+      const d = String(r.attendance_date).slice(0, 10);
+      return !min || d < min ? d : min;
+    }, null);
+    return { count: rows.length, oldest };
+  }, [rows]);
+
+  const flaggedAt = viewing
+    ? dayjs(`${String(viewing.attendance_date).slice(0, 10)}T${viewing.clock_in || '00:00:00'}`)
+        .add(24, 'hour')
+        .format('DD MMM YYYY, HH:mm')
+    : null;
 
   return (
     <div className="max-w-6xl mx-auto p-4 md:p-6">
@@ -160,7 +171,7 @@ export default function NeedsReview() {
             Missed Clock-Outs — Needs Review
           </Title>
           <Text type="secondary">
-            Employees who never clocked out and could not be verified at close of day.
+            On-site employees who never clocked out within 24 hours of clock-in.
           </Text>
         </div>
         <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
@@ -172,8 +183,8 @@ export default function NeedsReview() {
         type="warning"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Review the recorded presence history before marking the employee Present or Absent."
-        description="Contact the employee offline if needed. You can record an optional note explaining your decision; calls are not part of the system."
+        message="Review before marking Present or Absent"
+        description="These employees did not clock out within 24 hours of clock-in. Check any presence history below, contact the employee offline if needed, and record an optional note explaining your decision."
       />
 
       <Row gutter={[12, 12]} className="mb-4">
@@ -212,10 +223,7 @@ export default function NeedsReview() {
       <Modal
         open={!!viewing}
         title="Resolve missed clock-out"
-        onCancel={() => {
-          setViewing(null);
-          setConfirming(null);
-        }}
+        onCancel={() => { setViewing(null); setConfirming(null); }}
         footer={
           <Space wrap style={{ width: '100%', justifyContent: 'flex-end' }}>
             <Button onClick={() => { setViewing(null); setConfirming(null); }}>Cancel</Button>
@@ -257,11 +265,21 @@ export default function NeedsReview() {
                 </div>
               </div>
               <div style={{ marginTop: 12, fontSize: 12, color: '#475569', lineHeight: 1.7 }}>
-                <div>Clocked in at <strong>{viewing.clock_in || '—'}</strong></div>
+                <div>
+                  Clocked in at <strong>{viewing.clock_in || '—'}</strong> on{' '}
+                  <strong>{dayjs(viewing.attendance_date).format('DD MMM YYYY')}</strong>
+                </div>
+                {flaggedAt && (
+                  <div style={{ marginTop: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      Flagged after 24h with no clock-out — since {flaggedAt}
+                    </Text>
+                  </div>
+                )}
                 <div style={{ marginTop: 4 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>Flagged because: </Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Reason: </Text>
                   <Text style={{ fontSize: 12 }}>
-                    {viewing.review_note || 'Could not be verified at close of day'}
+                    {viewing.auto_clock_out_reason || FALLBACK_REASON}
                   </Text>
                 </div>
               </div>
@@ -294,7 +312,9 @@ export default function NeedsReview() {
 
             <Card size="small" title="Recorded presence events">
               {presenceLoading ? (
-                <Spin />
+                <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+                  <Spin />
+                </div>
               ) : presenceEvents.length ? (
                 <Timeline
                   items={presenceEvents.map((event) => {
@@ -331,10 +351,11 @@ export default function NeedsReview() {
                   })}
                 />
               ) : (
-                <Text type="secondary">No boundary events were recorded while the employee app was active.</Text>
+                <Text type="secondary">
+                  No boundary events were recorded — the employee app may have been closed before the 24h window elapsed.
+                </Text>
               )}
             </Card>
-
           </Space>
         )}
       </Modal>
@@ -364,7 +385,6 @@ export default function NeedsReview() {
           />
         </Space>
       </Modal>
-
     </div>
   );
 }

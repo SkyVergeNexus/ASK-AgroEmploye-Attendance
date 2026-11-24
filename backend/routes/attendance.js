@@ -11,7 +11,6 @@ const {
   REQUIRED_OUTSIDE_SAMPLES,
 } = require('../helpers/presenceTracking');
 const fs = require('fs');
-const path = require('path');
 const router = express.Router();
 
 // ============================================================
@@ -35,15 +34,12 @@ function ipv4ToInt(ip) {
 function ipv4InCidr(ip, entry) {
   if (!entry) return false;
   if (!entry.includes('/')) return ip === entry;
-
   const [base, bitsStr] = entry.split('/');
   const bits = Number(bitsStr);
   if (!Number.isInteger(bits) || bits < 0 || bits > 32) return false;
-
   const ipN = ipv4ToInt(ip);
   const baseN = ipv4ToInt(base);
   if (ipN == null || baseN == null) return false;
-
   const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
   return (ipN & mask) === (baseN & mask);
 }
@@ -98,11 +94,6 @@ function databaseDateTimeString(value) {
   return String(value || '').replace('T', ' ').slice(0, 19);
 }
 
-function databaseTimeString(value) {
-  if (value instanceof Date) return localTimeString(value);
-  return String(value || '').slice(11, 19);
-}
-
 function todayAt(timeString, fallback) {
   const src = String(timeString || fallback || '00:00:00');
   const [h, m] = src.split(':');
@@ -146,7 +137,6 @@ function serverError(res, err, context) {
   res.status(500).json({ message: 'Internal server error' });
 }
 
-// Combine a DATE (or ISO date) + TIME (HH:mm:ss) into a JS Date.
 function buildTimestamp(dateVal, timeVal) {
   try {
     if (!dateVal || !timeVal) return null;
@@ -162,10 +152,8 @@ function buildTimestamp(dateVal, timeVal) {
 // ============================================================
 //  SELFIE VALIDATION
 // ============================================================
-
 const SELFIE_MIN_BYTES = 10 * 1024;
 const SELFIE_MAX_BYTES = 5 * 1024 * 1024;
-const SELFIE_MAX_AGE_MS = 15 * 60 * 1000;
 const SELFIE_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
 
 function detectImageType(buf) {
@@ -369,8 +357,9 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       `INSERT INTO attendance
         (employee_id, attendance_date, clock_in, status,
          clock_in_lat, clock_in_lng, clock_in_ip, clock_in_method, clock_in_verified,
-         clock_in_mode, remote_location, remote_selfie)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         clock_in_mode, remote_location, remote_selfie,
+         presence_state, presence_last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user.id,
         today,
@@ -384,6 +373,8 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
         mode,
         remoteLocation,
         remoteSelfie,
+        mode === 'onsite' ? 'unknown' : null,
+        mode === 'onsite' ? localDateTimeString(now) : null,
       ]
     );
     selfieSaved = true;
@@ -414,7 +405,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 });
 
 // ============================================================
-//  CLOCK OUT
+//  CLOCK OUT  (on-site requires GPS + Wi-Fi when enforced)
 // ============================================================
 router.post('/clock-out', verifyToken, async (req, res) => {
   const today = localDateString();
@@ -431,7 +422,52 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       return res.status(400).json({ message: 'Already clocked out' });
     }
     const isRemote = record.clock_in_mode === 'remote';
+    const now = new Date();
 
+    const bodyLat = req.body?.lat != null && req.body.lat !== '' ? Number(req.body.lat) : null;
+    const bodyLng = req.body?.lng != null && req.body.lng !== '' ? Number(req.body.lng) : null;
+    const clientIp = getClientIp(req);
+
+    // ── Enforce GPS + Wi-Fi on clock-out for on-site employees ──
+    if (!isRemote) {
+      const [settingsRows] = await pool.query('SELECT * FROM settings WHERE id = 1');
+      const settings = settingsRows[0] || {};
+      const enforceLoc = Number(settings.enforce_location) === 1;
+      const enforceNet = Number(settings.enforce_network) === 1;
+
+      if (enforceNet) {
+        if (!clientIp || !ipMatchesAllowList(clientIp, settings.allowed_ips)) {
+          return res.status(403).json({
+            message: 'You must be on the office Wi-Fi to clock out.',
+            requiresOfficeWifi: true,
+            sawIp: clientIp,
+          });
+        }
+      }
+      if (enforceLoc) {
+        if (!isValidCoord(bodyLat, bodyLng) ||
+            settings.office_lat == null || settings.office_lng == null) {
+          return res.status(403).json({
+            message: 'Location required. Enable GPS on your device to clock out.',
+            requiresLocation: true,
+          });
+        }
+        const distance = haversineMeters(
+          bodyLat, bodyLng,
+          Number(settings.office_lat), Number(settings.office_lng)
+        );
+        const radius = Number(settings.geofence_radius_m || 200);
+        if (distance > radius) {
+          return res.status(403).json({
+            message: `You are ${Math.round(distance)}m from the office. Must be within ${radius}m to clock out.`,
+            distance: Math.round(distance),
+            radius,
+          });
+        }
+      }
+    }
+
+    // ── Tasks / reason handling ──
     const tasksCompleted = String(req.body?.tasks_completed || '').trim();
     if (isRemote && !tasksCompleted) {
       return res.status(400).json({
@@ -440,13 +476,13 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       });
     }
     if (tasksCompleted.length > 5000) {
-      return res
-        .status(400)
-        .json({ message: 'Tasks completed must be 5000 characters or fewer' });
+      return res.status(400).json({
+        message: 'Tasks completed must be 5000 characters or fewer',
+      });
     }
 
+    // ── Early clock-out approval (on-site only) ──
     let reason = null;
-    const now = new Date();
     let isEarly = false;
     if (!isRemote) {
       const [settingsRows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
@@ -473,7 +509,13 @@ router.post('/clock-out', verifyToken, async (req, res) => {
 
     const [result] = await pool.query(
       `UPDATE attendance
-       SET clock_out = ?, early_leave_reason = ?, tasks_completed = ?
+       SET clock_out = ?,
+           early_leave_reason = ?,
+           tasks_completed = ?,
+           after_close_tracking = 0,
+           presence_state = NULL,
+           presence_outside_count = 0,
+           presence_outside_since = NULL
        WHERE id = ? AND clock_out IS NULL`,
       [
         localTimeString(now),
@@ -529,6 +571,14 @@ router.get('/today', verifyToken, async (req, res) => {
   }
 });
 
+// ============================================================
+//  PRESENCE TRACKING
+//  - Used while on-site. After work_end, employees still inside
+//    keep being tracked until they step outside (which is only
+//    recorded as a presence event — NOT an auto clock-out).
+//  - If they never clock out and 24h elapse, the scheduler flags
+//    the record needs_review=1 (see helpers/presenceScheduler.js).
+// ============================================================
 router.get('/presence/active', verifyToken, async (req, res) => {
   try {
     const today = localDateString();
@@ -536,15 +586,15 @@ router.get('/presence/active', verifyToken, async (req, res) => {
     yesterday.setDate(yesterday.getDate() - 1);
     const [[rows], [settingsRows]] = await Promise.all([
       pool.query(
-      `SELECT id, attendance_date
-       FROM attendance
-       WHERE employee_id = ?
-         AND attendance_date BETWEEN ? AND ?
-         AND clock_out IS NULL
-         AND needs_review = 0
-         AND COALESCE(clock_in_mode, 'onsite') = 'onsite'
-       ORDER BY attendance_date DESC
-       LIMIT 1`,
+        `SELECT id, attendance_date
+         FROM attendance
+         WHERE employee_id = ?
+           AND attendance_date BETWEEN ? AND ?
+           AND clock_out IS NULL
+           AND needs_review = 0
+           AND COALESCE(clock_in_mode, 'onsite') = 'onsite'
+         ORDER BY attendance_date DESC
+         LIMIT 1`,
         [req.user.id, localDateString(yesterday), today]
       ),
       pool.query('SELECT enforce_location FROM settings WHERE id = 1'),
@@ -572,20 +622,20 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
   yesterday.setDate(yesterday.getDate() - 1);
   const sampleAt = localDateTimeString(now);
   const clientIp = getClientIp(req);
-  let autoClosed = false;
-  let autoClockOutTime = null;
   let attendanceId = null;
   let observedState = 'unknown';
 
   try {
     const [settingsRows] = await pool.query(
       `SELECT enforce_location, enforce_network, office_lat, office_lng,
-              geofence_radius_m, allowed_ips
+              geofence_radius_m, allowed_ips, work_end
        FROM settings WHERE id = 1`
     );
     const settings = settingsRows[0] || {};
     const enforceLocation = Number(settings.enforce_location) === 1;
     const enforceNetwork = Number(settings.enforce_network) === 1;
+    const workEnd = todayAt(settings.work_end, '17:00:00');
+    const pastClosing = now >= workEnd;
 
     let gpsInside = null;
     if (
@@ -595,10 +645,8 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
       settings.office_lng != null
     ) {
       const distance = haversineMeters(
-        lat,
-        lng,
-        Number(settings.office_lat),
-        Number(settings.office_lng)
+        lat, lng,
+        Number(settings.office_lat), Number(settings.office_lng)
       );
       gpsInside = distance <= Number(settings.geofence_radius_m || 200);
     }
@@ -639,10 +687,7 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
       const record = rows[0];
       attendanceId = record.id;
       const lastSeen = parseLocalDateTime(record.presence_last_seen_at);
-      if (
-        lastSeen &&
-        now.getTime() - lastSeen.getTime() < HEARTBEAT_INTERVAL_MS * 0.75
-      ) {
+      if (lastSeen && now.getTime() - lastSeen.getTime() < HEARTBEAT_INTERVAL_MS * 0.75) {
         await connection.commit();
         return res.json({
           tracking: true,
@@ -677,9 +722,8 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
           nextState = 'outside';
         }
       } else {
-        nextState = 'unknown';
-        outsideCount = 0;
-        outsideSince = null;
+        // unknown — do NOT reset progress toward a departure
+        nextState = previousState === 'outside' ? 'outside' : 'unknown';
       }
 
       if (eventType) {
@@ -701,53 +745,27 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
         );
       }
 
-      const clockOutAt = databaseTimeString(eventAt);
-      if (
-        eventType === 'departure' &&
-        nextState === 'outside' &&
-        Number(record.after_close_tracking) === 1
-      ) {
-        const [result] = await connection.query(
-          `UPDATE attendance
-           SET presence_state = ?, presence_gps_inside = ?, presence_network_inside = ?,
-               presence_last_seen_at = ?, presence_outside_count = ?,
-               presence_outside_since = ?, clock_out = ?, auto_clocked_out = 1,
-               auto_clock_out_reason = ?, auto_close_time = ?
-           WHERE id = ? AND clock_out IS NULL AND needs_review = 0
-             AND after_close_tracking = 1`,
-          [
-            nextState,
-            gpsInside,
-            networkInside,
-            sampleAt,
-            outsideCount,
-            outsideSince,
-            clockOutAt,
-            'Automatically clocked out at detected departure after closing',
-            clockOutAt,
-            record.id,
-          ]
-        );
-        autoClosed = result.affectedRows > 0;
-        if (autoClosed) autoClockOutTime = clockOutAt;
-      } else {
-        await connection.query(
-          `UPDATE attendance
-           SET presence_state = ?, presence_gps_inside = ?, presence_network_inside = ?,
-               presence_last_seen_at = ?, presence_outside_count = ?,
-               presence_outside_since = ?
-           WHERE id = ? AND clock_out IS NULL AND needs_review = 0`,
-          [
-            nextState,
-            gpsInside,
-            networkInside,
-            sampleAt,
-            outsideCount,
-            outsideSince,
-            record.id,
-          ]
-        );
-      }
+      // after_close_tracking is purely informational now — no auto clock-out.
+      const nextAfterClose =
+        pastClosing && nextState === 'inside' ? 1 : Number(record.after_close_tracking) === 1 && nextState === 'inside' ? 1 : 0;
+
+      await connection.query(
+        `UPDATE attendance
+         SET presence_state = ?, presence_gps_inside = ?, presence_network_inside = ?,
+             presence_last_seen_at = ?, presence_outside_count = ?,
+             presence_outside_since = ?, after_close_tracking = ?
+         WHERE id = ? AND clock_out IS NULL AND needs_review = 0`,
+        [
+          nextState,
+          gpsInside,
+          networkInside,
+          sampleAt,
+          outsideCount,
+          outsideSince,
+          nextAfterClose,
+          record.id,
+        ]
+      );
       await connection.commit();
     } catch (err) {
       await connection.rollback();
@@ -756,19 +774,8 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
       connection.release();
     }
 
-    if (autoClosed) {
-      const employeeName = req.user.name || `Employee #${req.user.id}`;
-      await notifyAdmins({
-        type: 'attendance_auto_clock_out',
-        title: 'Employee left after closing',
-        message: `${employeeName} was clocked out at the detected departure time (${autoClockOutTime}).`,
-        targetPath: '/reports',
-      });
-    }
-
     res.json({
-      tracking: !autoClosed,
-      auto_clocked_out: autoClosed,
+      tracking: true,
       attendance_id: attendanceId,
       state: observedState,
     });
@@ -986,16 +993,11 @@ router.post('/reverse-geocode', verifyToken, isAdmin, (req, res) => {
   const longitude = Number(req.body?.lng);
 
   if (
-    req.body?.lat == null ||
-    req.body?.lng == null ||
-    String(req.body.lat).trim() === '' ||
-    String(req.body.lng).trim() === '' ||
-    !Number.isFinite(latitude) ||
-    !Number.isFinite(longitude) ||
-    latitude < -90 ||
-    latitude > 90 ||
-    longitude < -180 ||
-    longitude > 180
+    req.body?.lat == null || req.body?.lng == null ||
+    String(req.body.lat).trim() === '' || String(req.body.lng).trim() === '' ||
+    !Number.isFinite(latitude) || !Number.isFinite(longitude) ||
+    latitude < -90 || latitude > 90 ||
+    longitude < -180 || longitude > 180
   ) {
     return res.status(400).json({ message: 'Valid latitude and longitude are required.' });
   }
@@ -1027,18 +1029,9 @@ router.get('/all', verifyToken, isAdmin, async (req, res) => {
   `;
   const params = [];
 
-  if (from) {
-    sql += ' AND a.attendance_date >= ?';
-    params.push(from);
-  }
-  if (to) {
-    sql += ' AND a.attendance_date <= ?';
-    params.push(to);
-  }
-  if (employee_id) {
-    sql += ' AND a.employee_id = ?';
-    params.push(employee_id);
-  }
+  if (from) { sql += ' AND a.attendance_date >= ?'; params.push(from); }
+  if (to) { sql += ' AND a.attendance_date <= ?'; params.push(to); }
+  if (employee_id) { sql += ' AND a.employee_id = ?'; params.push(employee_id); }
   sql += ' ORDER BY a.attendance_date DESC, e.full_name';
 
   try {
@@ -1052,9 +1045,6 @@ router.get('/all', verifyToken, isAdmin, async (req, res) => {
 // ============================================================
 //  ACTIVITY FEED (admin)
 // ============================================================
-// Includes: clock-ins, clock-outs, early-leave requests/decisions,
-// employee registrations, AND guest check-ins.
-// ============================================================
 router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
   const today = localDateString();
   const from = req.query.from || today;
@@ -1064,15 +1054,14 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
   try {
     const events = [];
 
-    // ---- 1. Employee attendance (clock-in + clock-out) ----
+    // 1. Employee attendance (clock-in + clock-out + reviews)
     const [attendance] = await pool.query(
       `SELECT a.id, a.employee_id, a.attendance_date, a.clock_in, a.clock_out,
               DATE_FORMAT(a.attendance_date, '%Y-%m-%d') AS attendance_date_key,
               DATE_FORMAT(a.admin_resolved_at, '%Y-%m-%d') AS admin_resolved_date,
               a.status, a.clock_in_mode, a.remote_location, a.remote_selfie,
               a.tasks_completed, a.early_leave_reason, a.created_at,
-              a.auto_clocked_out, a.admin_resolved, a.admin_resolved_at,
-              a.admin_resolved_reason,
+              a.admin_resolved, a.admin_resolved_at, a.admin_resolved_reason,
               reviewer.full_name AS admin_resolved_by_name,
               e.full_name, e.employee_code,
               d.name AS department
@@ -1096,20 +1085,11 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
           id: `att-in-${r.id}`,
           kind: 'clock-in',
           at: r.created_at,
-          employee: {
-            id: r.employee_id,
-            full_name: r.full_name,
-            employee_code: r.employee_code,
-            department: r.department,
-          },
+          employee: { id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, department: r.department },
           meta: {
-            attendance_id: r.id,
-            time: r.clock_in,
-            date: attendanceDate,
-            status: r.status,
-            mode: r.clock_in_mode,
-            remote_location: r.remote_location,
-            remote_selfie: r.remote_selfie,
+            attendance_id: r.id, time: r.clock_in, date: attendanceDate,
+            status: r.status, mode: r.clock_in_mode,
+            remote_location: r.remote_location, remote_selfie: r.remote_selfie,
           },
         });
       }
@@ -1119,21 +1099,13 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
           id: `att-out-${r.id}`,
           kind: 'clock-out',
           at: buildTimestamp(attendanceDate, r.clock_out) || r.created_at,
-          employee: {
-            id: r.employee_id,
-            full_name: r.full_name,
-            employee_code: r.employee_code,
-            department: r.department,
-          },
+          employee: { id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, department: r.department },
           meta: {
-            attendance_id: r.id,
-            time: r.clock_out,
-            date: attendanceDate,
+            attendance_id: r.id, time: r.clock_out, date: attendanceDate,
             mode: r.clock_in_mode,
             early: Boolean(r.early_leave_reason),
             early_reason: r.early_leave_reason,
             tasks_completed: r.tasks_completed,
-            auto_clocked_out: Boolean(r.auto_clocked_out),
             admin_resolved: Boolean(r.admin_resolved),
             status: r.status,
           },
@@ -1145,16 +1117,9 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
           id: `att-review-${r.id}`,
           kind: 'attendance-review',
           at: r.admin_resolved_at,
-          employee: {
-            id: r.employee_id,
-            full_name: r.full_name,
-            employee_code: r.employee_code,
-            department: r.department,
-          },
+          employee: { id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, department: r.department },
           meta: {
-            attendance_id: r.id,
-            date: attendanceDate,
-            status: r.status,
+            attendance_id: r.id, date: attendanceDate, status: r.status,
             admin_resolved_by_name: r.admin_resolved_by_name,
             admin_resolved_reason: r.admin_resolved_reason,
           },
@@ -1162,12 +1127,11 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
       }
     });
 
-    // ---- 2. Early-leave requests + decisions ----
+    // 2. Early-leave requests + decisions
     const [earlyLeaves] = await pool.query(
       `SELECT r.id, r.employee_id, r.requested_out_time, r.reason,
               r.status, r.admin_note, r.decided_by, r.decided_at, r.created_at,
-              e.full_name, e.employee_code,
-              d.name AS department,
+              e.full_name, e.employee_code, d.name AS department,
               decider.full_name AS decided_by_name
        FROM early_leave_requests r
        JOIN employees e ON r.employee_id = e.id
@@ -1183,43 +1147,24 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
         id: `early-req-${r.id}`,
         kind: 'early-request',
         at: r.created_at,
-        employee: {
-          id: r.employee_id,
-          full_name: r.full_name,
-          employee_code: r.employee_code,
-          department: r.department,
-        },
-        meta: {
-          request_id: r.id,
-          requested_out_time: r.requested_out_time,
-          reason: r.reason,
-          status: r.status,
-        },
+        employee: { id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, department: r.department },
+        meta: { request_id: r.id, requested_out_time: r.requested_out_time, reason: r.reason, status: r.status },
       });
-
       if (r.status !== 'pending' && r.decided_at) {
         events.push({
           id: `early-${r.status}-${r.id}`,
           kind: r.status === 'approved' ? 'early-approved' : 'early-rejected',
           at: r.decided_at,
-          employee: {
-            id: r.employee_id,
-            full_name: r.full_name,
-            employee_code: r.employee_code,
-            department: r.department,
-          },
+          employee: { id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, department: r.department },
           meta: {
-            request_id: r.id,
-            requested_out_time: r.requested_out_time,
-            reason: r.reason,
-            admin_note: r.admin_note,
-            decided_by_name: r.decided_by_name,
+            request_id: r.id, requested_out_time: r.requested_out_time,
+            reason: r.reason, admin_note: r.admin_note, decided_by_name: r.decided_by_name,
           },
         });
       }
     });
 
-    // ---- 3. Employee registrations ----
+    // 3. Employee registrations
     const [registrations] = await pool.query(
       `SELECT e.id, e.full_name, e.employee_code, e.email, e.is_approved,
               e.created_at, d.name AS department
@@ -1228,28 +1173,17 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
        WHERE DATE(e.created_at) BETWEEN ? AND ?`,
       [from, to]
     );
-
     registrations.forEach((r) => {
       events.push({
         id: `reg-${r.id}`,
         kind: 'registration',
         at: r.created_at,
-        employee: {
-          id: r.id,
-          full_name: r.full_name,
-          employee_code: r.employee_code,
-          department: r.department,
-        },
-        meta: {
-          email: r.email,
-          is_approved: !!r.is_approved,
-        },
+        employee: { id: r.id, full_name: r.full_name, employee_code: r.employee_code, department: r.department },
+        meta: { email: r.email, is_approved: !!r.is_approved },
       });
     });
 
-    // ---- 4. Guest check-ins ----
-    // guests: id, full_name, phone, gender, service_id, purpose, notes, created_at
-    // Service name lives in `services` (join by service_id).
+    // 4. Guest check-ins
     const [guestCheckins] = await pool.query(
       `SELECT g.id, g.full_name, g.phone, g.purpose, g.created_at,
               s.name AS service_name
@@ -1258,7 +1192,6 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
        WHERE DATE(g.created_at) BETWEEN ? AND ?`,
       [from, to]
     );
-
     guestCheckins.forEach((g) => {
       events.push({
         id: `guest-${g.id}`,
@@ -1271,14 +1204,11 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
           phone: g.phone || null,
           service_name: g.service_name || null,
           purpose: g.purpose || null,
-          time: g.created_at
-            ? new Date(g.created_at).toTimeString().slice(0, 8)
-            : null,
+          time: g.created_at ? new Date(g.created_at).toTimeString().slice(0, 8) : null,
         },
       });
     });
 
-    // ---- Sort all events newest-first, cap at limit ----
     events.sort((a, b) => {
       const ta = a.at ? new Date(a.at).getTime() : 0;
       const tb = b.at ? new Date(b.at).getTime() : 0;
@@ -1328,11 +1258,9 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
   }
 });
 
-// ═════════════════════════════════════════════════════════
-//  ADMIN REVIEW — flagged auto-clock-out records
-// ═════════════════════════════════════════════════════════
-
-// GET /attendance/needs-review
+// ============================================================
+//  ADMIN REVIEW — flagged records (24h missed clock-out)
+// ============================================================
 router.get('/needs-review', verifyToken, isAdmin, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -1352,11 +1280,6 @@ router.get('/needs-review', verifyToken, isAdmin, async (req, res) => {
   }
 });
 
-// PUT /attendance/:id/resolve-review
-// Body: { decision: 'present' | 'absent' }
-// - present → close at work_end with status 'present' (or keep 'late')
-// - absent  → close at work_end, status = 'absent'
-// Both close the day, so the record stops nagging the employee.
 router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
   const { decision } = req.body || {};
   const rawReason = req.body?.reason;
@@ -1374,8 +1297,7 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
     const [rows] = await pool.query(
       `SELECT id, employee_id, attendance_date,
               DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date_key,
-              clock_in,
-              status, needs_review, admin_resolved
+              clock_in, status, needs_review, admin_resolved
        FROM attendance WHERE id = ?`,
       [req.params.id]
     );
@@ -1388,7 +1310,6 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
     const [settingsRows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
     const workEnd = settingsRows[0]?.work_end || '17:00:00';
 
-    // 'late' stays 'late' — admin is only confirming presence, not changing timing.
     const newStatus =
       decision === 'absent' ? 'absent' :
       (r.status === 'late' ? 'late' : 'present');
@@ -1396,24 +1317,17 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
     const [result] = await pool.query(
       `UPDATE attendance
        SET clock_out = ?,
-           auto_clocked_out = 0,
-           auto_clock_out_reason = NULL,
-           auto_close_time = NULL,
            status = ?,
            needs_review = 0,
            admin_resolved = 1,
            admin_resolved_by = ?,
            admin_resolved_at = NOW(),
-           admin_resolved_reason = ?
+           admin_resolved_reason = ?,
+           presence_state = NULL,
+           after_close_tracking = 0
        WHERE id = ? AND needs_review = 1
          AND admin_resolved = 0 AND clock_out IS NULL`,
-      [
-        workEnd,
-        newStatus,
-        req.user.id,
-        decisionReason || null,
-        req.params.id,
-      ]
+      [workEnd, newStatus, req.user.id, decisionReason || null, req.params.id]
     );
     if (result.affectedRows === 0) {
       return res.status(400).json({ message: 'This attendance record has already been resolved' });

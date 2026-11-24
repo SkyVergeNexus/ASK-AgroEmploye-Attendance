@@ -1,13 +1,13 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   Card, Row, Col, Button, Typography, Space, Tag, Statistic, message,
-  Table, Empty, Badge, Grid, Avatar, Alert, Modal, Input, Popconfirm,
+  Table, Badge, Grid, Avatar, Alert, Modal, Input, Popconfirm,
 } from 'antd';
 import {
   LoginOutlined, LogoutOutlined, CheckCircleOutlined, ClockCircleOutlined,
   CloseCircleOutlined, CalendarOutlined, UserOutlined, ReloadOutlined, DeleteOutlined,
   EnvironmentOutlined, WifiOutlined, CameraOutlined, HomeOutlined,
-  SafetyCertificateOutlined, PlusOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
@@ -109,6 +109,7 @@ export default function Dashboard() {
   });
 
   const [clockInError, setClockInError] = useState(null);
+  const [clockOutError, setClockOutError] = useState(null);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -174,9 +175,9 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
+  // ── Geolocation ──
+  const refreshGeo = useCallback(() => {
     if (!settings) return;
-
     const enforced = !!Number(settings.enforce_location);
     if (!enforced) {
       setGeo({ status: 'not-enforced', distance: null, coords: null, radius: null });
@@ -196,10 +197,8 @@ export default function Dashboard() {
       (pos) => {
         const { latitude, longitude } = pos.coords;
         const dist = haversineMeters(
-          latitude,
-          longitude,
-          Number(settings.office_lat),
-          Number(settings.office_lng)
+          latitude, longitude,
+          Number(settings.office_lat), Number(settings.office_lng)
         );
         const radius = Number(settings.geofence_radius_m || 200);
         setGeo({
@@ -216,6 +215,8 @@ export default function Dashboard() {
     );
   }, [settings]);
 
+  useEffect(() => { refreshGeo(); }, [refreshGeo]);
+
   // ═══════════ CAMERA CAPTURE ═══════════
   const openCamera = async () => {
     setRemoteSelfie(null);
@@ -229,12 +230,10 @@ export default function Dashboard() {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('Camera not supported by this browser');
       }
-
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
-
       setCameraStream(stream);
     } catch (err) {
       const msg =
@@ -248,9 +247,7 @@ export default function Dashboard() {
   };
 
   const closeCamera = () => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach((t) => t.stop());
-    }
+    if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop());
     setCameraStream(null);
     setCameraOpen(false);
     setCameraReady(false);
@@ -280,9 +277,7 @@ export default function Dashboard() {
 
     setCapturingSelfie(true);
     try {
-      if (!navigator.geolocation) {
-        throw new Error('Location is not supported by this browser');
-      }
+      if (!navigator.geolocation) throw new Error('Location is not supported by this browser');
       const position = await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(
           resolve,
@@ -305,16 +300,10 @@ export default function Dashboard() {
       ctx.scale(-1, 1);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      const blob = await new Promise((resolve) =>
-        canvas.toBlob(resolve, 'image/jpeg', 0.9)
-      );
-
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
       if (!blob) throw new Error('Failed to capture photo');
 
-      const file = new File([blob], `selfie_${Date.now()}.jpg`, {
-        type: 'image/jpeg',
-      });
-
+      const file = new File([blob], `selfie_${Date.now()}.jpg`, { type: 'image/jpeg' });
       setRemoteSelfie(file);
       setSelfieCoordinates(coordinates);
       setSelfieCapturedAt(capturedAt);
@@ -331,10 +320,7 @@ export default function Dashboard() {
   const todaysRequests = useMemo(() => {
     if (!today) return [];
     const todayStr = localDateString();
-    return earlyRequests.filter((r) => {
-      const createdDate = String(r.created_at).slice(0, 10);
-      return createdDate === todayStr;
-    });
+    return earlyRequests.filter((r) => String(r.created_at).slice(0, 10) === todayStr);
   }, [earlyRequests, today]);
 
   const pendingEarly = todaysRequests.find((r) => r.status === 'pending');
@@ -378,15 +364,10 @@ export default function Dashboard() {
         formData.append('lat', String(coords.lat));
         formData.append('lng', String(coords.lng));
         formData.append('selfie', remoteSelfie);
-        if (selfieCapturedAt) {
-          formData.append('captured_at', selfieCapturedAt.toISOString());
-        }
+        if (selfieCapturedAt) formData.append('captured_at', selfieCapturedAt.toISOString());
         await api.post('/attendance/clock-in', formData);
       } else {
-        await api.post('/attendance/clock-in', {
-          mode: 'onsite',
-          ...(coords || {}),
-        });
+        await api.post('/attendance/clock-in', { mode: 'onsite', ...(coords || {}) });
       }
       message.success('Clocked in!');
       window.dispatchEvent(new Event('attendance:changed'));
@@ -397,6 +378,7 @@ export default function Dashboard() {
       setSelfieCoordinates(null);
       setSelfieCapturedAt(null);
       load();
+      refreshGeo();
     } catch (e) {
       const data = e.response?.data;
       const msg = data?.message || e.message || 'Clock-in failed';
@@ -416,14 +398,16 @@ export default function Dashboard() {
   };
 
   // ═══════════ CLOCK OUT ═══════════
+  // On-site: must be inside GPS AND on office Wi-Fi (when enforced).
+  // Remote: requires tasks list.
   const clockOut = async (tasksList) => {
     const hasTasksArg = Array.isArray(tasksList);
 
+    // Remote flow — open tasks modal first
     if (today?.clock_in_mode === 'remote' && !hasTasksArg) {
       setRemoteClockOutOpen(true);
       return;
     }
-
     if (today?.clock_in_mode === 'remote' && hasTasksArg && tasksList.length === 0) {
       message.error('Add at least one completed task before clocking out');
       return;
@@ -434,23 +418,65 @@ export default function Dashboard() {
       : null;
 
     setClocking(true);
+    setClockOutError(null);
     try {
-      await api.post(
-        '/attendance/clock-out',
-        hasTasksArg ? { tasks_completed: tasksText } : {}
-      );
+      const payload = {};
+      if (hasTasksArg) payload.tasks_completed = tasksText;
+
+      // For on-site, fetch fresh GPS right before submitting
+      if (today?.clock_in_mode !== 'remote') {
+        let coords = geo.coords;
+        if (!coords && navigator.geolocation) {
+          coords = await new Promise((resolve) => {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+              () => resolve(null),
+              { enableHighAccuracy: true, timeout: 8000 }
+            );
+          });
+        }
+        if (coords) {
+          payload.lat = coords.lat;
+          payload.lng = coords.lng;
+        }
+      }
+
+      await api.post('/attendance/clock-out', payload);
       message.success('Clocked out!');
       window.dispatchEvent(new Event('attendance:changed'));
       setRemoteClockOutOpen(false);
       setRemoteTasks([]);
       setTaskInput('');
       load();
+      refreshGeo();
     } catch (e) {
       const data = e.response?.data;
+
       if (data?.requiresApproval) {
         setRemoteClockOutOpen(false);
         setEarlyModalOpen(true);
         setEarlyReason('');
+      } else if (data?.requiresOfficeWifi) {
+        setClockOutError({
+          message: 'You must be on the office Wi-Fi to clock out.',
+          requiresOfficeWifi: true,
+          sawIp: data?.sawIp,
+        });
+        message.error('Connect to the office Wi-Fi to clock out');
+        checkIp();
+      } else if (data?.requiresLocation) {
+        setClockOutError({
+          message: 'Enable location/GPS to clock out.',
+          requiresLocation: true,
+        });
+        message.error('Enable GPS to clock out');
+      } else if (data?.distance != null) {
+        setClockOutError({
+          message: `You are ${data.distance}m from the office.`,
+          distance: data.distance,
+          radius: data.radius,
+        });
+        message.error(`You are ${data.distance}m away. Must be within ${data.radius}m.`);
       } else {
         message.error(data?.message || 'Clock-out failed');
       }
@@ -462,26 +488,14 @@ export default function Dashboard() {
   // ═══════════ TASK LIST HANDLERS ═══════════
   const addTask = () => {
     const trimmed = taskInput.trim();
-    if (!trimmed) {
-      message.warning('Type a task before adding');
-      return;
-    }
-    if (trimmed.length > 500) {
-      message.warning('Each task must be 500 characters or fewer');
-      return;
-    }
+    if (!trimmed) return message.warning('Type a task before adding');
+    if (trimmed.length > 500) return message.warning('Each task must be 500 characters or fewer');
     setRemoteTasks((prev) => [...prev, trimmed]);
     setTaskInput('');
   };
-
-  const removeTask = (index) => {
-    setRemoteTasks((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const editTask = (index, value) => {
+  const removeTask = (index) => setRemoteTasks((prev) => prev.filter((_, i) => i !== index));
+  const editTask = (index, value) =>
     setRemoteTasks((prev) => prev.map((t, i) => (i === index ? value : t)));
-  };
-
   const handleTaskInputKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -491,14 +505,10 @@ export default function Dashboard() {
 
   // ═══════════ EARLY LEAVE ═══════════
   const submitEarlyRequest = async () => {
-    if (!earlyReason.trim()) {
-      return message.error('Please provide a reason');
-    }
+    if (!earlyReason.trim()) return message.error('Please provide a reason');
     setSubmittingRequest(true);
     try {
-      await api.post('/attendance/early-leave/request', {
-        reason: earlyReason.trim(),
-      });
+      await api.post('/attendance/early-leave/request', { reason: earlyReason.trim() });
       message.success('Request submitted. Waiting for admin approval.');
       setEarlyModalOpen(false);
       setEarlyReason('');
@@ -524,13 +534,6 @@ export default function Dashboard() {
     }
   };
 
-  const locationBlocked =
-    geo.status === 'outside' ||
-    geo.status === 'denied' ||
-    geo.status === 'unsupported' ||
-    geo.status === 'no-office' ||
-    geo.status === 'checking';
-
   // ═══════════ Flags ═══════════
   const enforceLocation = !!Number(settings?.enforce_location);
   const ipEnforced = ipCheck?.enforce === true;
@@ -538,22 +541,42 @@ export default function Dashboard() {
 
   const networkIsEnforced = ipCheck ? ipEnforced : enforceNetwork;
   const ipAllowed = ipCheck ? ipCheck.allowed !== false : true;
-  const presenceChecksEnabled = enforceLocation || networkIsEnforced;
+
+  const geoInside = geo.status === 'inside';
+  const geoBlocked =
+    geo.status === 'outside' ||
+    geo.status === 'denied' ||
+    geo.status === 'unsupported' ||
+    geo.status === 'no-office' ||
+    geo.status === 'checking';
+
+  const locationBlocked = geoBlocked;
+  const networkBlocked = networkIsEnforced && !ipAllowed;
 
   const scheduleStart = settings ? timeStringToDate(settings.work_start, now) : null;
   const scheduleEnd = settings ? timeStringToDate(settings.work_end, now) : null;
-  const canClockIn = Boolean(
-    !today &&
-    scheduleStart &&
-    scheduleEnd &&
-    now >= scheduleStart &&
-    now <= scheduleEnd
+
+  const withinWindow = Boolean(
+    scheduleStart && scheduleEnd && now >= scheduleStart && now <= scheduleEnd
   );
+
+  const canClockIn = Boolean(!today && withinWindow);
   const canClockInOnsite =
     canClockIn &&
     (!enforceLocation || !locationBlocked) &&
     (!networkIsEnforced || ipAllowed);
-  const canClockOut = Boolean(today && !today.clock_out && !pendingEarly);
+
+  const isOnsiteToday = today && today.clock_in_mode !== 'remote';
+  const onsiteOutBlocked =
+    isOnsiteToday && ((enforceLocation && !geoInside) || networkBlocked);
+
+  const canClockOut = Boolean(
+    today &&
+    !today.clock_out &&
+    !pendingEarly &&
+    (today.clock_in_mode === 'remote' || !onsiteOutBlocked)
+  );
+
   const clockInUnavailableReason = !today && settings
     ? now < scheduleStart
       ? `Clock-in opens at ${String(settings.work_start).slice(0, 5)}.`
@@ -566,39 +589,26 @@ export default function Dashboard() {
 
   const recentHistory = useMemo(() => {
     return [...history]
-      .sort((a, b) =>
-        String(b.attendance_date).localeCompare(String(a.attendance_date))
-      )
+      .sort((a, b) => String(b.attendance_date).localeCompare(String(a.attendance_date)))
       .slice(0, RECENT_LIMIT);
   }, [history]);
 
+  // ═══════════ Countdown ═══════════
   const countdown = useMemo(() => {
     if (!settings) return { text: '—', hint: 'Loading settings…', active: false };
 
     const workEnd = scheduleEnd;
     const workStart = scheduleStart;
-    if (!workEnd || !workStart) {
-      return { text: '—', hint: 'No work hours set', active: false };
-    }
+    if (!workEnd || !workStart) return { text: '—', hint: 'No work hours set', active: false };
 
-    if (today?.status === 'leave') {
-      return { text: '—', hint: 'Approved leave today', active: false };
-    }
+    if (today?.status === 'leave') return { text: '—', hint: 'Approved leave today', active: false };
 
     if (!today?.clock_in) {
       if (now < workStart) {
-        return {
-          text: '—',
-          hint: `Clock-in opens at ${String(settings.work_start).slice(0, 5)}`,
-          active: false,
-        };
+        return { text: '—', hint: `Clock-in opens at ${String(settings.work_start).slice(0, 5)}`, active: false };
       }
       if (now > workEnd) {
-        return {
-          text: '—',
-          hint: `Clock-in closed at ${String(settings.work_end).slice(0, 5)}`,
-          active: false,
-        };
+        return { text: '—', hint: `Clock-in closed at ${String(settings.work_end).slice(0, 5)}`, active: false };
       }
       return { text: '00:00:00', hint: 'Starts when you clock in', active: false };
     }
@@ -612,25 +622,9 @@ export default function Dashboard() {
             : today.status === 'late'
               ? 'Admin confirmed your attendance (late)'
               : 'Admin marked you present'
-          : today.auto_clocked_out
-            ? `Automatically clocked out at ${today.clock_out}`
-            : today.early_leave_reason ? 'Left early — reason recorded' : 'Day complete',
-        active: false,
-      };
-    }
-
-    if (pendingEarly) {
-      return {
-        text: '00:00:00',
-        hint: 'Early clock-out pending approval',
-        active: false,
-      };
-    }
-
-    if (today.clock_in_mode === 'remote') {
-      return {
-        text: 'Flexible',
-        hint: 'Remote — clock out when your work is complete',
+          : today.early_leave_reason
+            ? 'Left early — reason recorded'
+            : 'Day complete',
         active: false,
       };
     }
@@ -638,28 +632,29 @@ export default function Dashboard() {
     if (today.needs_review) {
       return {
         text: 'Review',
-        hint: 'Your attendance is awaiting an admin decision',
+        hint: 'You missed clock-out — admin is reviewing',
         active: false,
       };
     }
 
-    if (today.after_close_tracking) {
+    if (pendingEarly) {
+      return { text: '00:00:00', hint: 'Early clock-out pending approval', active: false };
+    }
+
+    if (today.clock_in_mode === 'remote') {
+      return { text: 'Flexible', hint: 'Remote — clock out when your work is complete', active: false };
+    }
+
+    // On-site, still checked in
+    if (now >= workEnd) {
       return {
         text: 'Monitoring',
-        hint: 'On-site presence is being monitored until departure',
+        hint: 'Past closing — clock out when you leave the office',
         active: false,
       };
     }
 
     const remainingMs = workEnd.getTime() - now.getTime();
-    if (remainingMs <= 0) {
-      return {
-        text: '00:00:00',
-        hint: 'Past closing — on-site attendance is being finalized',
-        active: false,
-      };
-    }
-
     return {
       text: formatDuration(remainingMs),
       hint: `Until ${String(settings.work_end).slice(0, 5)}`,
@@ -673,8 +668,7 @@ export default function Dashboard() {
       dataIndex: 'attendance_date',
       key: 'attendance_date',
       render: (v) => String(v).slice(0, 10),
-      sorter: (a, b) =>
-        String(a.attendance_date).localeCompare(String(b.attendance_date)),
+      sorter: (a, b) => String(a.attendance_date).localeCompare(String(b.attendance_date)),
       defaultSortOrder: 'descend',
     },
     {
@@ -687,13 +681,11 @@ export default function Dashboard() {
       title: 'Clock Out',
       dataIndex: 'clock_out',
       key: 'clock_out',
-      render: (_, r) => (
+      render: (v, r) => (
         <Space size={4}>
           {v || <Text type="secondary">{attendanceClockOutLabel(r)}</Text>}
           <AttendanceRecordTag record={r} />
-          {r.early_leave_reason && (
-            <Tag color="orange" style={{ marginLeft: 4 }}>early</Tag>
-          )}
+          {r.early_leave_reason && <Tag color="orange" style={{ marginLeft: 4 }}>early</Tag>}
         </Space>
       ),
     },
@@ -709,106 +701,36 @@ export default function Dashboard() {
     },
   ];
 
-  const renderMobileRecord = (r) => (
-    <div
-      key={r.id}
-      style={{
-        background: '#fff',
-        border: '1px solid #e2e8f0',
-        borderRadius: 12,
-        padding: '12px 14px',
-        marginBottom: 10,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div
-            style={{
-              width: 32, height: 32, borderRadius: 8,
-              background: '#ecfdf5', color: '#065f46',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 14,
-            }}
-          >
-            <ClockCircleOutlined />
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
-              {String(r.attendance_date).slice(0, 10)}
-            </div>
-            <div style={{ fontSize: 11, color: '#64748b' }}>
-              {r.early_leave_reason ? 'Left early' : 'Full day'}
-            </div>
-          </div>
-        </div>
-        <Tag
-          color={statusColor[r.status] || 'default'}
-          style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize' }}
-        >
-          {r.status}
-        </Tag>
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 8,
-          background: '#f8fafc',
-          borderRadius: 8,
-          padding: '8px 10px',
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            In
-          </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#16a34a' }}>
-            {r.clock_in || '—'}
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            Out
-          </div>
-          <div
-            style={{
-              fontSize: 14, fontWeight: 600,
-              color: r.clock_out ? '#d97706' : '#94a3b8',
-            }}
-          >
-            {r.clock_out || '—'}
-          </div>
-          <AttendanceRecordTag record={r} />
-        </div>
-      </div>
-
-      {r.early_leave_reason && (
-        <div
-          style={{
-            fontSize: 11, color: '#92400e',
-            background: '#fffbeb', border: '1px solid #fde68a',
-            borderRadius: 8, padding: '6px 8px',
-          }}
-        >
-          <strong>Reason:</strong> {r.early_leave_reason}
-        </div>
-      )}
-    </div>
-  );
+  // ── Clock-out blocker description (on-site only) ──
+  const clockOutBlockedDescription = (() => {
+    if (!isOnsiteToday) return null;
+    const bits = [];
+    if (enforceLocation && !geoInside) {
+      bits.push(
+        geo.status === 'outside'
+          ? `GPS: you are ${geo.distance}m away (max ${geo.radius}m)`
+          : geo.status === 'denied'
+            ? 'GPS permission denied'
+            : geo.status === 'unsupported'
+              ? 'GPS not supported by this device'
+              : geo.status === 'no-office'
+                ? 'Office location not configured'
+                : 'GPS: checking…'
+      );
+    }
+    if (networkBlocked) {
+      bits.push(`Wi-Fi: ${ipCheck?.clientIp || 'unknown IP'} is not on the office network`);
+    }
+    return bits.length ? bits.join(' · ') : null;
+  })();
 
   return (
     <div className="max-w-5xl mx-auto p-4 md:p-6">
-      {/* ═══════════════ Greeting header ═══════════════ */}
+      {/* ═══════════ Greeting header ═══════════ */}
       {isMobile ? (
         <Card
           style={{
-            border: 'none',
-            borderRadius: 16,
-            marginBottom: 16,
+            border: 'none', borderRadius: 16, marginBottom: 16,
             background: 'linear-gradient(135deg, #064e3b 0%, #065f46 55%, #047857 100%)',
             boxShadow: '0 10px 24px -10px rgba(6,95,70,0.5)',
           }}
@@ -826,14 +748,11 @@ export default function Dashboard() {
               }}
             />
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>
-                Welcome back
-              </div>
+              <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Welcome back</div>
               <div
                 style={{
                   color: '#fff', fontSize: 18, fontWeight: 700,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                  lineHeight: 1.2,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2,
                 }}
               >
                 {user?.name || 'there'}
@@ -842,8 +761,7 @@ export default function Dashboard() {
                 {user?.department_name && (
                   <Tag
                     style={{
-                      background: 'rgba(255,255,255,0.15)',
-                      border: '1px solid rgba(255,255,255,0.25)',
+                      background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.25)',
                       color: '#fff', borderRadius: 10, fontSize: 11, margin: 0,
                     }}
                   >
@@ -856,12 +774,8 @@ export default function Dashboard() {
 
           <div
             style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 10,
-              background: 'rgba(0,0,0,0.15)',
-              borderRadius: 12,
-              padding: '12px 14px',
+              display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
+              background: 'rgba(0,0,0,0.15)', borderRadius: 12, padding: '12px 14px',
             }}
           >
             <div>
@@ -881,8 +795,7 @@ export default function Dashboard() {
               </div>
               <div
                 style={{
-                  fontSize: 20, fontWeight: 700,
-                  fontFamily: 'ui-monospace, monospace',
+                  fontSize: 20, fontWeight: 700, fontFamily: 'ui-monospace, monospace',
                   color: countdown.active ? '#fbbf24' : 'rgba(255,255,255,0.5)',
                   letterSpacing: 1, lineHeight: 1.2,
                 }}
@@ -919,13 +832,9 @@ export default function Dashboard() {
             </Col>
             <Col xs={24} md={10} style={{ textAlign: 'right' }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {now.toLocaleDateString(undefined, {
-                  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-                })}
+                {now.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
               </Text>
-              <div style={{ fontSize: 26, fontWeight: 600, color: '#065f46' }}>
-                {now.toLocaleTimeString()}
-              </div>
+              <div style={{ fontSize: 26, fontWeight: 600, color: '#065f46' }}>{now.toLocaleTimeString()}</div>
               <div className="mt-2">
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {countdown.active ? 'Time left today' : 'Countdown'}
@@ -939,25 +848,19 @@ export default function Dashboard() {
                 >
                   {countdown.text}
                 </div>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {countdown.hint}
-                </Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>{countdown.hint}</Text>
               </div>
             </Col>
           </Row>
         </Card>
       )}
 
-      {/* ═══════════════ Today's status ═══════════════ */}
+      {/* ═══════════ Today's status ═══════════ */}
       <Card
         title={
           <Space>
             <span>Today's Status</span>
-            {today && (
-              <Tag color={statusColor[today.status] || 'default'}>
-                {today.status}
-              </Tag>
-            )}
+            {today && <Tag color={statusColor[today.status] || 'default'}>{today.status}</Tag>}
           </Space>
         }
         variant="borderless"
@@ -966,7 +869,7 @@ export default function Dashboard() {
           <Button
             size="small"
             icon={<ReloadOutlined />}
-            onClick={() => { load(); checkIp(); }}
+            onClick={() => { load(); checkIp(); refreshGeo(); }}
             loading={loading || ipChecking}
           >
             {!isMobile && 'Refresh'}
@@ -982,47 +885,36 @@ export default function Dashboard() {
             description={`Your administrator's clock-in hours are ${String(settings.work_start).slice(0, 5)}–${String(settings.work_end).slice(0, 5)}.`}
           />
         )}
+
         {!today && networkIsEnforced && ipCheck && (
-          <>
-            {ipCheck.allowed ? (
-              <Alert
-                type="success"
-                showIcon
-                icon={<SafetyCertificateOutlined />}
-                style={{ marginBottom: 12 }}
-                title="You're on the office network"
-                description={
-                  <span style={{ fontSize: 13 }}>
-                    Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is in
-                    the allowlist. On-site clock-in is available.
-                  </span>
-                }
-              />
-            ) : (
-              <Alert
-                type="error"
-                showIcon
-                icon={<WifiOutlined />}
-                style={{ marginBottom: 12 }}
-                title="You're not on the office Wi-Fi"
-                description={
-                  <span style={{ fontSize: 13 }}>
-                    Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is not
-                    in the allowed list. Connect to the office network to clock in
-                    on-site, or use remote clock-in below.
-                  </span>
-                }
-              />
-            )}
-          </>
+          ipCheck.allowed ? (
+            <Alert
+              type="success" showIcon icon={<SafetyCertificateOutlined />}
+              style={{ marginBottom: 12 }}
+              title="You're on the office network"
+              description={
+                <span style={{ fontSize: 13 }}>
+                  Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is in the allowlist.
+                </span>
+              }
+            />
+          ) : (
+            <Alert
+              type="error" showIcon icon={<WifiOutlined />}
+              style={{ marginBottom: 12 }}
+              title="You're not on the office Wi-Fi"
+              description={
+                <span style={{ fontSize: 13 }}>
+                  Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is not in the allowed list.
+                </span>
+              }
+            />
+          )
         )}
 
         {clockInError && !today && (
           <Alert
-            type="error"
-            showIcon
-            closable
-            onClose={() => setClockInError(null)}
+            type="error" showIcon closable onClose={() => setClockInError(null)}
             style={{ marginBottom: 12 }}
             title={clockInError.message}
             description={
@@ -1046,152 +938,93 @@ export default function Dashboard() {
             }
           />
         )}
-        {today && !today.clock_out && today.clock_in_mode !== 'remote' && (
+
+        {today?.needs_review && (
           <Alert
-            type={presenceChecksEnabled ? 'info' : 'warning'}
-            showIcon
+            type="warning" showIcon
             style={{ marginBottom: 12 }}
-            title={presenceChecksEnabled ? 'On-site presence monitoring' : 'Presence checks are not configured'}
-            description={presenceChecksEnabled
-              ? 'Keep the employee app open and visible. GPS inside OR the company network match counts as on-site. After closing, a detected departure clocks you out; if you are away at closing or tracking stops, an administrator reviews the record.'
-              : 'Ask an administrator to enable the GPS geofence or office network check. Without either check, the system cannot monitor departure and will send the record for review.'}
+            title="Missed clock-out — awaiting admin review"
+            description="You did not clock out within 24 hours of your clock-in. An administrator will review this day and mark you present or absent."
           />
         )}
 
-        {!today && (enforceLocation || networkIsEnforced) && (
+        {clockOutError && today && !today.clock_out && (
           <Alert
-            type="info"
-            showIcon
-            icon={networkIsEnforced ? <WifiOutlined /> : <EnvironmentOutlined />}
+            type="error" showIcon closable onClose={() => setClockOutError(null)}
             style={{ marginBottom: 12 }}
-            title={
-              enforceLocation && networkIsEnforced
-                ? 'Two conditions must pass to clock in'
-                : networkIsEnforced
-                ? 'Office network check is on'
-                : 'GPS geofence check is on'
-            }
+            title={clockOutError.message}
             description={
-              <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-                {networkIsEnforced && (
-                  <div>
-                    <strong>1. Office Wi-Fi</strong> — your device must be on the
-                    office network.
-                    {ipCheck && (
-                      <>
-                        {' '}
-                        {ipCheck.allowed ? (
-                          <Tag color="green">✓ network OK</Tag>
-                        ) : (
-                          <Tag color="red">✗ not on office network</Tag>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-                {enforceLocation && (
-                  <div>
-                    <strong>{networkIsEnforced ? '2.' : '1.'} Inside GPS radius</strong>{' '}
-                    {geo.status === 'inside' && (
-                      <Tag color="green">✓ {geo.distance}m</Tag>
-                    )}
-                    {geo.status === 'outside' && (
-                      <Tag color="orange">✗ {geo.distance}m (max {geo.radius}m)</Tag>
-                    )}
-                    {geo.status === 'checking' && <Tag>checking…</Tag>}
-                    {geo.status === 'denied' && <Tag color="red">GPS denied</Tag>}
-                    {geo.status === 'unsupported' && (
-                      <Tag color="red">GPS unsupported</Tag>
-                    )}
-                    {geo.status === 'no-office' && (
-                      <Tag color="orange">not configured</Tag>
-                    )}
-                  </div>
-                )}
-              </div>
+              clockOutError.requiresOfficeWifi ? (
+                <>
+                  <Text strong>Connect to the office Wi-Fi</Text> to clock out.
+                  {clockOutError.sawIp && (
+                    <div style={{ marginTop: 4, fontSize: 12 }}>
+                      <Text type="secondary">Your current IP: </Text>
+                      <Text code>{clockOutError.sawIp}</Text>
+                    </div>
+                  )}
+                </>
+              ) : clockOutError.requiresLocation ? (
+                'Enable location/GPS in your browser settings to clock out.'
+              ) : clockOutError.distance != null ? (
+                `You are ${clockOutError.distance}m away. Move within ${clockOutError.radius}m of the office.`
+              ) : (
+                'Try again or contact your administrator.'
+              )
+            }
+            action={
+              <Button size="small" onClick={() => { refreshGeo(); checkIp(); }}>
+                Retry
+              </Button>
             }
           />
         )}
 
-        {!today && enforceLocation && geo.status === 'checking' && (
+        {isOnsiteToday && clockOutBlockedDescription && !today.clock_out && (
           <Alert
-            type="info"
-            showIcon
-            icon={<EnvironmentOutlined />}
+            type="warning" showIcon
             style={{ marginBottom: 12 }}
-            title="Checking your location…"
-            description="Verifying you are at the office before enabling clock-in."
+            title="Clock-out requires the office GPS and Wi-Fi"
+            description={clockOutBlockedDescription}
+            action={
+              <Button
+                size="small" icon={<ReloadOutlined />}
+                onClick={() => { refreshGeo(); checkIp(); }}
+                loading={ipChecking}
+              >
+                Re-check
+              </Button>
+            }
           />
         )}
-        {!today && enforceLocation && geo.status === 'outside' && (
+
+        {today && !today.clock_out && today.clock_in_mode !== 'remote' && !today.needs_review && (
           <Alert
-            type="warning"
-            showIcon
-            icon={<EnvironmentOutlined />}
+            type="info" showIcon
             style={{ marginBottom: 12 }}
-            title={`You are ${geo.distance}m from the office`}
-            description={`You must be within ${geo.radius}m to clock in. Move closer to the office.`}
-          />
-        )}
-        {!today && enforceLocation && geo.status === 'denied' && (
-          <Alert
-            type="warning"
-            showIcon
-            icon={<EnvironmentOutlined />}
-            style={{ marginBottom: 12 }}
-            title="Location permission denied"
-            description="Enable location access in your browser to clock in."
-          />
-        )}
-        {!today && enforceLocation && geo.status === 'unsupported' && (
-          <Alert
-            type="warning"
-            showIcon
-            icon={<EnvironmentOutlined />}
-            style={{ marginBottom: 12 }}
-            title="Location not supported by this device"
-            description="Your browser doesn't support GPS."
-          />
-        )}
-        {!today && enforceLocation && geo.status === 'no-office' && (
-          <Alert
-            type="warning"
-            showIcon
-            icon={<EnvironmentOutlined />}
-            style={{ marginBottom: 12 }}
-            title="Office location not configured"
-            description="Ask your administrator to set the office location in Settings."
+            title="On-site presence monitoring"
+            description="Keep the employee app open. You must be within the office GPS and on the office Wi-Fi to clock out. The time you clock out is what gets recorded — not the scheduled closing time. If you never clock out within 24 hours, admin will review your day."
           />
         )}
 
         {pendingEarly && (
           <Alert
-            type="warning"
-            showIcon
+            type="warning" showIcon
             style={{ marginBottom: 12 }}
             title="Early clock-out pending approval"
             description={
               <div>
                 <div>
-                  You requested to leave at{' '}
-                  <Text strong>{pendingEarly.requested_out_time}</Text>. Waiting for
-                  admin review.
+                  You requested to leave at <Text strong>{pendingEarly.requested_out_time}</Text>.
                 </div>
                 <Popconfirm
                   title="Cancel this request?"
-                  description="The admin will no longer see it in their queue."
                   okText="Yes, cancel"
                   okButtonProps={{ danger: true }}
                   cancelText="Keep it"
                   onConfirm={cancelEarlyRequest}
                 >
-                  <Button
-                    danger
-                    size="small"
-                    icon={<DeleteOutlined />}
-                    loading={cancelling}
-                    style={{ marginTop: 8 }}
-                  >
+                  <Button danger size="small" icon={<DeleteOutlined />} loading={cancelling} style={{ marginTop: 8 }}>
                     Cancel request
                   </Button>
                 </Popconfirm>
@@ -1201,17 +1034,15 @@ export default function Dashboard() {
         )}
         {approvedEarly && !today?.clock_out && (
           <Alert
-            type="success"
-            showIcon
+            type="success" showIcon
             style={{ marginBottom: 12 }}
             title="Early clock-out approved"
-            description="You can now click Clock Out to end your day."
+            description="You can now click Clock Out when you're inside the office GPS and Wi-Fi."
           />
         )}
         {rejectedEarly && !today?.clock_out && (
           <Alert
-            type="error"
-            showIcon
+            type="error" showIcon
             style={{ marginBottom: 12 }}
             title="Early clock-out rejected"
             description={
@@ -1222,22 +1053,20 @@ export default function Dashboard() {
           />
         )}
 
+        {/* Status tiles (mobile/desktop) */}
         {isMobile ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
             <div
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 background: '#f8fafc', border: '1px solid #e2e8f0',
-                borderRadius: 12, padding: '10px 14px',
-                borderLeft: '4px solid #16a34a',
+                borderRadius: 12, padding: '10px 14px', borderLeft: '4px solid #16a34a',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <LoginOutlined style={{ color: '#16a34a', fontSize: 18 }} />
                 <div>
-                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                    Clock In
-                  </div>
+                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Clock In</div>
                   <div style={{ fontSize: 18, fontWeight: 700, color: today?.clock_in ? '#065f46' : '#94a3b8' }}>
                     {today?.clock_in || '—'}
                   </div>
@@ -1249,16 +1078,13 @@ export default function Dashboard() {
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 background: '#f8fafc', border: '1px solid #e2e8f0',
-                borderRadius: 12, padding: '10px 14px',
-                borderLeft: '4px solid #d97706',
+                borderRadius: 12, padding: '10px 14px', borderLeft: '4px solid #d97706',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <LogoutOutlined style={{ color: '#d97706', fontSize: 18 }} />
                 <div>
-                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                    Clock Out
-                  </div>
+                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Clock Out</div>
                   <div style={{ fontSize: 18, fontWeight: 700, color: today?.clock_out ? '#065f46' : '#94a3b8' }}>
                     {today ? attendanceClockOutLabel(today) : 'Not recorded'}
                   </div>
@@ -1293,9 +1119,7 @@ export default function Dashboard() {
                   <ClockCircleOutlined style={{ color: '#94a3b8', fontSize: 18 }} />
                 )}
                 <div>
-                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                    Status
-                  </div>
+                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Status</div>
                   <div
                     style={{
                       fontSize: 16, fontWeight: 700, textTransform: 'capitalize',
@@ -1354,8 +1178,7 @@ export default function Dashboard() {
                       today?.status === 'present' ? '#16a34a' :
                       today?.status === 'late' ? '#d97706' :
                       today?.status === 'absent' ? '#dc2626' :
-                      today?.status === 'leave' ? '#7c3aed' :
-                      '#64748b',
+                      today?.status === 'leave' ? '#7c3aed' : '#64748b',
                   },
                 }}
               />
@@ -1370,7 +1193,7 @@ export default function Dashboard() {
             icon={<LoginOutlined />}
             onClick={() => setClockModeOpen(true)}
             disabled={!canClockIn}
-            loading={clocking}
+            loading={clocking && canClockIn}
             style={{ backgroundColor: canClockIn ? '#15803d' : undefined }}
           >
             Clock In
@@ -1386,22 +1209,13 @@ export default function Dashboard() {
             Clock Out
           </Button>
           {pendingEarly && (
-            <Badge
-              status="warning"
-              text={<Text type="secondary">Awaiting admin approval</Text>}
-            />
+            <Badge status="warning" text={<Text type="secondary">Awaiting admin approval</Text>} />
           )}
           {approvedEarly && !today?.clock_out && (
-            <Badge
-              status="success"
-              text={<Text type="secondary">Approved — you can clock out</Text>}
-            />
+            <Badge status="success" text={<Text type="secondary">Approved — you can clock out</Text>} />
           )}
           {today?.clock_out && (
-            <Badge
-              status="success"
-              text={<Text type="secondary">Day complete — see you tomorrow</Text>}
-            />
+            <Badge status="success" text={<Text type="secondary">Day complete — see you tomorrow</Text>} />
           )}
         </Space>
       </Card>
@@ -1424,12 +1238,12 @@ export default function Dashboard() {
               <WifiOutlined style={{ color: '#15803d', fontSize: 22 }} />
               <Text strong>On-site</Text>
               <Text type="secondary" style={{ minHeight: 40 }}>
-                Clock in during the configured work hours using the usual office checks.
+                Clock in during the configured work hours using the office GPS + Wi-Fi checks.
               </Text>
               <Button
                 block
                 disabled={!canClockInOnsite}
-                loading={clocking}
+                loading={clocking && canClockInOnsite}
                 onClick={() => clockIn('onsite')}
               >
                 Clock in on-site
@@ -1458,7 +1272,7 @@ export default function Dashboard() {
                 type="primary"
                 block
                 disabled={!canClockIn}
-                loading={clocking}
+                loading={clocking && canClockIn}
                 onClick={() => {
                   setClockModeOpen(false);
                   setRemoteClockInOpen(true);
@@ -1467,9 +1281,7 @@ export default function Dashboard() {
                 Clock in remotely
               </Button>
               {!canClockIn && clockInUnavailableReason && (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {clockInUnavailableReason}
-                </Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>{clockInUnavailableReason}</Text>
               )}
             </Space>
           </Card>
@@ -1483,9 +1295,7 @@ export default function Dashboard() {
         okText="Submit & clock in"
         cancelText="Cancel"
         confirmLoading={clocking}
-        okButtonProps={{
-          disabled: !remoteLocation.trim() || !remoteSelfie || !selfieCoordinates,
-        }}
+        okButtonProps={{ disabled: !remoteLocation.trim() || !remoteSelfie || !selfieCoordinates }}
         onOk={() => clockIn('remote')}
         onCancel={() => {
           setRemoteClockInOpen(false);
@@ -1504,12 +1314,12 @@ export default function Dashboard() {
             title="Remote attendance check"
             description={
               settings?.work_start && settings?.work_end
-                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live selfie. Fresh GPS coordinates are captured with the selfie and saved with the attendance record.`
-                : 'Enter your work location, allow GPS, and take a live selfie during working hours. Fresh GPS coordinates are captured with the selfie and saved with the attendance record.'
+                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live selfie.`
+                : 'Enter your work location, allow GPS, and take a live selfie during working hours.'
             }
           />
           <div>
-            <Text strong>Work location (enter the site or place name)</Text>
+            <Text strong>Work location</Text>
             <Input
               value={remoteLocation}
               onChange={(e) => setRemoteLocation(e.target.value)}
@@ -1522,13 +1332,13 @@ export default function Dashboard() {
           <div>
             <Text strong>Live selfie at your work location</Text>
             <Text type="secondary" style={{ display: 'block', marginTop: 2, marginBottom: 8 }}>
-              You must take the photo now — uploading from your gallery is disabled to prevent old photos.
+              You must take the photo now — uploading from your gallery is disabled.
             </Text>
             {selfiePreview ? (
               <div>
                 <img
                   src={selfiePreview}
-                  alt="Remote work location selfie preview"
+                  alt="Selfie preview"
                   style={{ display: 'block', width: '100%', maxHeight: 240, objectFit: 'cover', borderRadius: 10 }}
                 />
                 {selfieCapturedAt && (
@@ -1545,9 +1355,7 @@ export default function Dashboard() {
                   </Text>
                 )}
                 <Space style={{ marginTop: 8 }}>
-                  <Button icon={<CameraOutlined />} onClick={openCamera} size="small">
-                    Retake
-                  </Button>
+                  <Button icon={<CameraOutlined />} onClick={openCamera} size="small">Retake</Button>
                   <Button
                     type="link"
                     danger
@@ -1576,21 +1384,103 @@ export default function Dashboard() {
                 </Button>
                 <div
                   style={{
-                    marginTop: 10,
-                    padding: '8px 12px',
-                    background: '#fffbeb',
-                    border: '1px solid #fde68a',
-                    borderRadius: 8,
-                    fontSize: 12,
-                    color: '#92400e',
-                    lineHeight: 1.5,
+                    marginTop: 10, padding: '8px 12px', background: '#fffbeb',
+                    border: '1px solid #fde68a', borderRadius: 8, fontSize: 12,
+                    color: '#92400e', lineHeight: 1.5,
                   }}
                 >
                   <strong>Note:</strong> you must take a live photo with the camera.
-                  Gallery uploads are disabled for security.
                 </div>
               </div>
             )}
+          </div>
+        </Space>
+      </Modal>
+
+      {/* ═══════════ Remote clock-out modal (tasks) ═══════════ */}
+      <Modal
+        open={remoteClockOutOpen}
+        title="Remote clock-out — what did you complete?"
+        okText="Submit & clock out"
+        cancelText="Cancel"
+        confirmLoading={clocking}
+        okButtonProps={{ disabled: remoteTasks.length === 0 }}
+        onOk={() => clockOut(remoteTasks)}
+        onCancel={() => setRemoteClockOutOpen(false)}
+        centered
+        width={isMobile ? 'calc(100vw - 24px)' : 520}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            title="List today's completed tasks"
+            description="You must add at least one task before clocking out."
+          />
+          <Space.Compact style={{ width: '100%' }}>
+            <Input
+              value={taskInput}
+              onChange={(e) => setTaskInput(e.target.value)}
+              onKeyDown={handleTaskInputKeyDown}
+              placeholder="e.g. Visited 3 client farms"
+              maxLength={500}
+            />
+            <Button type="primary" onClick={addTask}>Add</Button>
+          </Space.Compact>
+          {remoteTasks.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {remoteTasks.map((t, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: '#f8fafc', border: '1px solid #e2e8f0',
+                    borderRadius: 8, padding: '6px 10px',
+                  }}
+                >
+                  <Text style={{ flex: 1 }}>{i + 1}. {t}</Text>
+                  <Button type="link" danger size="small" onClick={() => removeTask(i)}>
+                    Remove
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Text type="secondary">No tasks added yet.</Text>
+          )}
+        </Space>
+      </Modal>
+
+      {/* ═══════════ Early leave modal ═══════════ */}
+      <Modal
+        open={earlyModalOpen}
+        title="Request early clock-out"
+        okText="Submit request"
+        cancelText="Cancel"
+        confirmLoading={submittingRequest}
+        onOk={submitEarlyRequest}
+        onCancel={() => setEarlyModalOpen(false)}
+        centered
+        width={isMobile ? 'calc(100vw - 24px)' : 520}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="warning"
+            showIcon
+            title="Admin approval required"
+            description="You cannot clock out before your scheduled end time without approval. Your request will go to an administrator."
+          />
+          <div>
+            <Text strong>Reason</Text>
+            <TextArea
+              value={earlyReason}
+              onChange={(e) => setEarlyReason(e.target.value)}
+              rows={4}
+              maxLength={5000}
+              showCount
+              placeholder="Explain why you need to leave early"
+              style={{ marginTop: 6 }}
+            />
           </div>
         </Space>
       </Modal>
@@ -1608,21 +1498,12 @@ export default function Dashboard() {
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           {cameraError ? (
-            <Alert
-              type="error"
-              showIcon
-              title="Camera unavailable"
-              description={cameraError}
-            />
+            <Alert type="error" showIcon title="Camera unavailable" description={cameraError} />
           ) : (
             <div
               style={{
-                position: 'relative',
-                width: '100%',
-                background: '#000',
-                borderRadius: 12,
-                overflow: 'hidden',
-                aspectRatio: '4 / 3',
+                position: 'relative', width: '100%', background: '#000',
+                borderRadius: 12, overflow: 'hidden', aspectRatio: '4 / 3',
               }}
             >
               <video
@@ -1630,23 +1511,16 @@ export default function Dashboard() {
                 playsInline
                 muted
                 style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  display: 'block',
-                  transform: 'scaleX(-1)',
+                  width: '100%', height: '100%', objectFit: 'cover',
+                  display: 'block', transform: 'scaleX(-1)',
                 }}
               />
               {!cameraReady && !cameraError && (
                 <div
                   style={{
-                    position: 'absolute',
-                    inset: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#fff',
-                    fontSize: 13,
+                    position: 'absolute', inset: 0, display: 'flex',
+                    alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontSize: 13,
                   }}
                 >
                   Starting camera…
@@ -1654,230 +1528,109 @@ export default function Dashboard() {
               )}
             </div>
           )}
-
-          <Space style={{ width: '100%', justifyContent: 'center' }} size="middle">
-            <Button onClick={closeCamera}>Cancel</Button>
-            <Button
-              type="primary"
-              size="large"
-              icon={<CameraOutlined />}
-              onClick={captureFromCamera}
-              disabled={!cameraReady || !!cameraError || capturingSelfie}
-              loading={capturingSelfie}
-              style={{ minWidth: 160, backgroundColor: cameraReady ? '#15803d' : undefined }}
-            >
-              {capturingSelfie ? 'Getting GPS and capturing…' : 'Capture'}
-            </Button>
-          </Space>
-
-          {cameraError && (
-            <Alert
-              type="warning"
-              showIcon
-              title="Camera problem"
-              description="If your camera keeps failing, contact your administrator. Gallery uploads are disabled for security reasons."
-            />
-          )}
+          <Button
+            type="primary"
+            block
+            size="large"
+            icon={<CameraOutlined />}
+            loading={capturingSelfie}
+            disabled={!cameraReady || !!cameraError}
+            onClick={captureFromCamera}
+            style={{ backgroundColor: cameraReady ? '#15803d' : undefined }}
+          >
+            Capture photo
+          </Button>
         </Space>
       </Modal>
 
-      {/* ═══════════ Remote clock-out modal with task list ═══════════ */}
-      <Modal
-        open={remoteClockOutOpen}
-        title="Tasks completed today"
-        okText="Submit & clock out"
-        cancelText="Cancel"
-        confirmLoading={clocking}
-        okButtonProps={{ disabled: remoteTasks.length === 0 }}
-        onOk={() => clockOut(remoteTasks)}
-        onCancel={() => {
-          setRemoteClockOutOpen(false);
-          setRemoteTasks([]);
-          setTaskInput('');
-        }}
-        centered
-        width={isMobile ? 'calc(100vw - 24px)' : 560}
-        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            title="A daily work summary is required"
-            description="Add each task you completed today. Your entries are numbered automatically."
-          />
-
-          <div>
-            <Text strong>Add a completed task</Text>
-            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-              <Input
-                value={taskInput}
-                onChange={(e) => setTaskInput(e.target.value)}
-                onKeyDown={handleTaskInputKeyDown}
-                placeholder="e.g. Visited client farm in Nsawam"
-                maxLength={500}
-                allowClear
-              />
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={addTask}
-                disabled={!taskInput.trim()}
+      {/* ═══════════ Recent history ═══════════ */}
+      <Card title="Recent attendance" variant="borderless" className="shadow-sm">
+        {isMobile ? (
+          recentHistory.length === 0 ? (
+            <Text type="secondary">No records yet.</Text>
+          ) : (
+            recentHistory.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12,
+                  padding: '12px 14px', marginBottom: 10,
+                  display: 'flex', flexDirection: 'column', gap: 8,
+                }}
               >
-                Add
-              </Button>
-            </div>
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-              Press Enter to add quickly.
-            </Text>
-          </div>
-
-          {remoteTasks.length > 0 && (
-            <div>
-              <Text strong>
-                Your tasks ({remoteTasks.length})
-              </Text>
-              <div style={{ marginTop: 8 }}>
-                {remoteTasks.map((task, index) => (
-                  <div
-                    key={index}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      padding: '10px 12px',
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 10,
-                      marginBottom: 8,
-                    }}
-                  >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div
                       style={{
-                        width: 26,
-                        height: 26,
-                        borderRadius: 13,
-                        background: '#065f46',
-                        color: '#fff',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 12,
-                        fontWeight: 700,
-                        flexShrink: 0,
+                        width: 32, height: 32, borderRadius: 8,
+                        background: '#ecfdf5', color: '#065f46',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14,
                       }}
                     >
-                      {index + 1}
+                      <ClockCircleOutlined />
                     </div>
-                    <Input
-                      value={task}
-                      onChange={(e) => editTask(index, e.target.value)}
-                      variant="borderless"
-                      style={{ flex: 1, padding: 0, fontSize: 13 }}
-                      maxLength={500}
-                    />
-                    <Button
-                      type="text"
-                      danger
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      onClick={() => removeTask(index)}
-                    />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
+                        {String(r.attendance_date).slice(0, 10)}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#64748b' }}>
+                        {r.early_leave_reason ? 'Left early' : 'Full day'}
+                      </div>
+                    </div>
                   </div>
-                ))}
+                  <Tag
+                    color={statusColor[r.status] || 'default'}
+                    style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize' }}
+                  >
+                    {r.status}
+                  </Tag>
+                </div>
+                <div
+                  style={{
+                    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
+                    background: '#f8fafc', borderRadius: 8, padding: '8px 10px',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>In</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#16a34a' }}>{r.clock_in || '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Out</div>
+                    <div
+                      style={{
+                        fontSize: 14, fontWeight: 600,
+                        color: r.clock_out ? '#d97706' : '#94a3b8',
+                      }}
+                    >
+                      {r.clock_out || '—'}
+                    </div>
+                    <AttendanceRecordTag record={r} />
+                  </div>
+                </div>
+                {r.early_leave_reason && (
+                  <div
+                    style={{
+                      fontSize: 11, color: '#92400e', background: '#fffbeb',
+                      border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px',
+                    }}
+                  >
+                    <strong>Reason:</strong> {r.early_leave_reason}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-
-          {remoteTasks.length === 0 && (
-            <div
-              style={{
-                padding: '20px 16px',
-                textAlign: 'center',
-                color: '#94a3b8',
-                fontSize: 13,
-                border: '1px dashed #e2e8f0',
-                borderRadius: 10,
-              }}
-            >
-              No tasks added yet. Type a task above and click <strong>Add</strong>.
-            </div>
-          )}
-        </Space>
-      </Modal>
-
-      {/* ═══════════ Recent History ═══════════ */}
-      <Card
-        title={
-          <Space>
-            <span>Recent Attendance</span>
-            <Tag color="default">Last {RECENT_LIMIT}</Tag>
-          </Space>
-        }
-        variant="borderless"
-        className="shadow-sm"
-        extra={
-          !isMobile && (
-            <Text type="secondary">
-              showing {recentHistory.length} of {history.length}
-            </Text>
-          )
-        }
-      >
-        {isMobile ? (
-          loading ? (
-            <Text type="secondary">Loading...</Text>
-          ) : recentHistory.length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No records yet" />
-          ) : (
-            <div>{recentHistory.map(renderMobileRecord)}</div>
+            ))
           )
         ) : (
           <Table
-            rowKey="id"
-            columns={columns}
             dataSource={recentHistory}
-            loading={loading}
+            columns={columns}
+            rowKey="id"
             pagination={false}
-            scroll={{ x: 'max-content' }}
-            locale={{ emptyText: 'No records yet' }}
+            size="middle"
           />
         )}
       </Card>
-
-      {/* ═══════════ Early clock-out modal ═══════════ */}
-      <Modal
-        open={earlyModalOpen}
-        title="Request early clock-out"
-        okText="Submit request"
-        cancelText="Cancel"
-        confirmLoading={submittingRequest}
-        onOk={submitEarlyRequest}
-        onCancel={() => setEarlyModalOpen(false)}
-        centered
-        width={500}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="warning"
-            showIcon
-            title="This needs admin approval"
-            description="You'll be able to clock out once an administrator approves your request."
-          />
-          <div>
-            <Text strong>Reason for leaving early</Text>
-            <TextArea
-              rows={4}
-              style={{ marginTop: 6 }}
-              placeholder="e.g. Doctor's appointment, family emergency, official duty…"
-              value={earlyReason}
-              onChange={(e) => setEarlyReason(e.target.value)}
-              maxLength={500}
-              showCount
-            />
-          </div>
-        </Space>
-      </Modal>
     </div>
   );
 }

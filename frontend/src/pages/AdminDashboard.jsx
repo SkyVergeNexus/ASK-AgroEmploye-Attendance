@@ -762,7 +762,7 @@ export default function AdminDashboard() {
                 Edit Settings
               </Button>
             </Link>
-          </Card>
+          </Card>  
 
           {/* Quick Actions */}
           <Card title="Quick Actions" bordered={false} className="shadow-sm">

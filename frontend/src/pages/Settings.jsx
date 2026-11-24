@@ -1,12 +1,13 @@
 import { useEffect, useState, useMemo } from 'react';
 import {
   Card, Form, TimePicker, InputNumber, Input, Button, Typography,
-  Space, Alert, Skeleton, Switch, Divider, Tag, Spin, Upload,
+  Space, Alert, Skeleton, Switch, Tag, Spin, Upload, Collapse,
 } from 'antd';
 import {
   SaveOutlined, ReloadOutlined, EnvironmentOutlined, AimOutlined,
-  WifiOutlined, CopyOutlined, UploadOutlined, PictureOutlined, DeleteOutlined,
-  CheckCircleOutlined, CloseCircleOutlined,
+  WifiOutlined, PlusOutlined, UploadOutlined, PictureOutlined, DeleteOutlined,
+  CheckCircleFilled, CloseCircleFilled, SettingOutlined, ClockCircleOutlined,
+  BankOutlined, InfoCircleOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import api from '../api/axios';
@@ -16,6 +17,12 @@ import EmailSenderSettings from '../components/EmailSenderSettings';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
+
+const BRAND = '#065f46';
+const BRAND_SOFT = '#ecfdf5';
+const BORDER = '#e5e7eb';
+
+/* ---------- IP helpers (unchanged logic) ---------- */
 
 function ipv4ToInt(ip) {
   const parts = String(ip).split('.');
@@ -45,13 +52,93 @@ function ipMatchesAllowList(ip, allowedIps) {
   return entries.some((entry) => ipv4InCidr(ip, entry));
 }
 
+/* ---------- Small presentational pieces ---------- */
+
+function IconBadge({ icon }) {
+  return (
+    <span
+      style={{
+        width: 36, height: 36, borderRadius: 10, background: BRAND_SOFT, color: BRAND,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, flexShrink: 0,
+      }}
+    >
+      {icon}
+    </span>
+  );
+}
+
+function Section({ icon, title, description, children }) {
+  return (
+    <Card
+      variant="borderless"
+      style={{ border: `1px solid ${BORDER}`, borderRadius: 12, marginBottom: 20 }}
+      styles={{ body: { padding: 0 } }}
+    >
+      <div
+        style={{
+          display: 'flex', gap: 12, alignItems: 'center',
+          padding: '16px 24px', borderBottom: `1px solid ${BORDER}`,
+        }}
+      >
+        <IconBadge icon={icon} />
+        <div>
+          <Title level={5} style={{ margin: 0 }}>{title}</Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>{description}</Text>
+        </div>
+      </div>
+      <div style={{ padding: 24 }}>{children}</div>
+    </Card>
+  );
+}
+
+function Stat({ icon, label, value, on }) {
+  return (
+    <div
+      style={{
+        flex: '1 1 180px', display: 'flex', gap: 12, alignItems: 'center',
+        padding: '14px 16px', background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12,
+      }}
+    >
+      <IconBadge icon={icon} />
+      <div style={{ minWidth: 0 }}>
+        <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>{label}</Text>
+        <Text strong style={{ fontSize: 15, color: on === false ? '#6b7280' : undefined }}>{value}</Text>
+      </div>
+    </div>
+  );
+}
+
+function ToggleRow({ name, title, help }) {
+  return (
+    <div
+      style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16,
+        padding: '14px 16px', background: '#f9fafb', border: `1px solid ${BORDER}`,
+        borderRadius: 10, marginBottom: 20,
+      }}
+    >
+      <div>
+        <Text strong style={{ display: 'block' }}>{title}</Text>
+        <Text type="secondary" style={{ fontSize: 13 }}>{help}</Text>
+      </div>
+      <Form.Item name={name} valuePropName="checked" style={{ margin: 0 }}>
+        <Switch checkedChildren="On" unCheckedChildren="Off" />
+      </Form.Item>
+    </div>
+  );
+}
+
+/* ---------- Page ---------- */
+
 export default function Settings() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [enforce, setEnforce] = useState(false);
   const [enforceNetwork, setEnforceNetwork] = useState(true);
+  const [hours, setHours] = useState({ start: null, end: null, late: 0 });
 
   const [currentIp, setCurrentIp] = useState(null);
   const [ipLoading, setIpLoading] = useState(false);
@@ -66,14 +153,17 @@ export default function Settings() {
       const { data } = await api.get('/settings');
       const enforcedLoc = !!Number(data.enforce_location);
       const enforcedNet = data.enforce_network == null ? true : !!Number(data.enforce_network);
+      const start = dayjs(data.work_start, 'HH:mm:ss');
+      const end = dayjs(data.work_end, 'HH:mm:ss');
       setEnforce(enforcedLoc);
       setEnforceNetwork(enforcedNet);
       setCoverUrl(data.login_cover_url || null);
       setAllowedIpsValue(data.allowed_ips || '');
+      setHours({ start, end, late: data.late_threshold_minutes ?? 0 });
       form.setFieldsValue({
         company_name: data.company_name,
-        work_start: dayjs(data.work_start, 'HH:mm:ss'),
-        work_end: dayjs(data.work_end, 'HH:mm:ss'),
+        work_start: start,
+        work_end: end,
         late_threshold_minutes: data.late_threshold_minutes,
         office_lat: data.office_lat ? Number(data.office_lat) : null,
         office_lng: data.office_lng ? Number(data.office_lng) : null,
@@ -82,6 +172,7 @@ export default function Settings() {
         enforce_network: enforcedNet,
         allowed_ips: data.allowed_ips || '',
       });
+      setDirty(false);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to load settings');
     } finally {
@@ -120,6 +211,7 @@ export default function Settings() {
           office_lat: Number(pos.coords.latitude.toFixed(7)),
           office_lng: Number(pos.coords.longitude.toFixed(7)),
         });
+        setDirty(true);
         toast.success('Filled with current location');
         setLocating(false);
       },
@@ -131,26 +223,27 @@ export default function Settings() {
     );
   };
 
-  const addCurrentIpToAllowList = () => {
-    if (!currentIp) return toast.error('No current IP detected');
-    const current = form.getFieldValue('allowed_ips') || '';
-    const list = current.split(',').map((x) => x.trim()).filter(Boolean);
-    if (list.includes(currentIp)) return toast('This IP is already in the list');
-    const next = [...list, currentIp].join(', ');
+  const setIpList = (next) => {
     form.setFieldsValue({ allowed_ips: next });
     setAllowedIpsValue(next);
+    setDirty(true);
+  };
+
+  const addCurrentIpToAllowList = () => {
+    if (!currentIp) return toast.error('No current IP detected');
+    const list = (form.getFieldValue('allowed_ips') || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (list.includes(currentIp)) return toast('This IP is already in the list');
+    setIpList([...list, currentIp].join(', '));
     toast.success('IP added to allowlist');
   };
 
   const removeIpFromList = (ip) => {
-    const current = form.getFieldValue('allowed_ips') || '';
-    const next = current
+    const next = (form.getFieldValue('allowed_ips') || '')
       .split(',')
       .map((x) => x.trim())
       .filter((x) => x && x !== ip)
       .join(', ');
-    form.setFieldsValue({ allowed_ips: next });
-    setAllowedIpsValue(next);
+    setIpList(next);
   };
 
   const ipPreview = useMemo(() => {
@@ -211,6 +304,7 @@ export default function Settings() {
       });
       toast.success('Settings saved');
       setAllowedIpsValue(values.allowed_ips || '');
+      setDirty(false);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Save failed');
     } finally {
@@ -218,117 +312,176 @@ export default function Settings() {
     }
   };
 
+  const lateAfter =
+    hours.start && hours.start.isValid()
+      ? hours.start.add(Number(hours.late) || 0, 'minute').format('HH:mm')
+      : '--:--';
+  const fmt = (d) => (d && d.isValid() ? d.format('HH:mm') : '--:--');
+
+  const rulesItems = [
+    {
+      key: 'rules',
+      label: (
+        <Space>
+          <InfoCircleOutlined style={{ color: BRAND }} />
+          <Text strong>How attendance rules work</Text>
+        </Space>
+      ),
+      children: (
+        <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>Employees can clock in only within the configured work hours.</li>
+          <li>Anyone clocking in after work start plus the late threshold is marked late.</li>
+          <li>On-site clock-ins follow the location and network checks below when their switches are on.</li>
+          <li>Remote clock-ins need a selfie and GPS location, and are accepted only during work hours.</li>
+          <li>
+            On-site presence is monitored while the employee app is open. After closing, employees
+            verified on-site stay clocked in until their departure is detected. Anyone outside the
+            monitored area, or who cannot be verified, is sent to admin review.
+          </li>
+          <li>Early on-site clock-outs need admin approval. Remote employees can clock out when their work is done.</li>
+        </ul>
+      ),
+    },
+  ];
+
   return (
-    <div className="max-w-3xl mx-auto p-4 md:p-6">
-      <div className="mb-6">
-        <Title level={3} style={{ margin: 0, color: '#065f46' }}>
-          System Settings
-        </Title>
-        <Text type="secondary">
-          Work hours, late threshold, branding, and location
-        </Text>
+    <div style={{ maxWidth: 880, margin: '0 auto', padding: '24px 16px 0' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+        <span
+          style={{
+            width: 48, height: 48, borderRadius: 12, background: BRAND, color: '#fff',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
+          }}
+        >
+          <SettingOutlined />
+        </span>
+        <div>
+          <Title level={3} style={{ margin: 0, color: BRAND }}>System settings</Title>
+          <Text type="secondary">Work hours, branding, location and network rules</Text>
+        </div>
       </div>
 
-      <Alert
-        type="info"
-        showIcon
-        className="mb-4"
-        title="Attendance behaviour"
-        description={
-          <>
-            Employees can clock in only within configured work hours. Anyone
-            clocking in after (work start + late threshold) is marked late.
-            On-site clock-ins follow the checks below
-            when their switches are ON.
-            Remote clock-ins require a selfie and GPS location and are only
-            accepted during the configured work hours. On-site presence is
-            monitored while the employee app is open. After closing, employees
-            who remain verified on-site stay clocked in until their departure is
-            detected; employees outside the monitored area or unverifiable at
-            closing are sent to admin review. Early on-site clock-outs require
-            admin approval;
-            remote employees can clock out when their work is complete.
-          </>
-        }
-      />
-
-      <Card variant="borderless" className="shadow-sm">
-        {loading ? (
+      {loading ? (
+        <Card variant="borderless" style={{ border: `1px solid ${BORDER}`, borderRadius: 12 }}>
           <Skeleton active paragraph={{ rows: 12 }} />
-        ) : (
+        </Card>
+      ) : (
+        <>
+          {/* Live summary */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
+            <Stat icon={<ClockCircleOutlined />} label="Work hours" value={`${fmt(hours.start)} to ${fmt(hours.end)}`} />
+            <Stat icon={<ClockCircleOutlined />} label="Marked late after" value={lateAfter} />
+            <Stat
+              icon={<EnvironmentOutlined />}
+              label="GPS geofence"
+              value={enforce ? 'Enforced' : 'Off'}
+              on={enforce}
+            />
+            <Stat
+              icon={<WifiOutlined />}
+              label="Office network"
+              value={enforceNetwork ? 'Enforced' : 'Off'}
+              on={enforceNetwork}
+            />
+          </div>
+
+          <Collapse
+            ghost
+            items={rulesItems}
+            style={{ background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12, marginBottom: 20 }}
+          />
+
           <Form
             form={form}
             layout="vertical"
             onFinish={onFinish}
             requiredMark={false}
-            onValuesChange={(changed) => {
+            onValuesChange={(changed, all) => {
+              setDirty(true);
               if ('enforce_location' in changed) setEnforce(!!changed.enforce_location);
               if ('enforce_network' in changed) setEnforceNetwork(!!changed.enforce_network);
               if ('allowed_ips' in changed) setAllowedIpsValue(changed.allowed_ips || '');
+              if ('work_start' in changed || 'work_end' in changed || 'late_threshold_minutes' in changed) {
+                setHours({
+                  start: all.work_start,
+                  end: all.work_end,
+                  late: all.late_threshold_minutes,
+                });
+              }
             }}
           >
-            {/* ===== CORE ===== */}
-            <Form.Item
-              label="Company Name"
-              name="company_name"
-              rules={[{ required: true, message: 'Company name is required' }]}
+            {/* ===== GENERAL + HOURS ===== */}
+            <Section
+              icon={<BankOutlined />}
+              title="Company and work hours"
+              description="Your company name and the daily schedule used for attendance."
             >
-              <Input placeholder="ASK Agrobusiness Limited" />
-            </Form.Item>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Form.Item
-                label="Work Start"
-                name="work_start"
-                rules={[{ required: true, message: 'Work start is required' }]}
+                label="Company name"
+                name="company_name"
+                rules={[{ required: true, message: 'Company name is required' }]}
               >
-                <TimePicker format="HH:mm" use12Hours={false} style={{ width: '100%' }} />
+                <Input size="large" placeholder="ASK Agrobusiness Limited" />
               </Form.Item>
-              <Form.Item
-                label="Work End"
-                name="work_end"
-                rules={[{ required: true, message: 'Work end is required' }]}
-              >
-                <TimePicker format="HH:mm" use12Hours={false} style={{ width: '100%' }} />
-              </Form.Item>
-            </div>
 
-            <Form.Item
-              label="Late Threshold (minutes after work start)"
-              name="late_threshold_minutes"
-              rules={[{ required: true, message: 'Late threshold is required' }]}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Form.Item
+                  label="Work start"
+                  name="work_start"
+                  rules={[{ required: true, message: 'Work start is required' }]}
+                >
+                  <TimePicker size="large" format="HH:mm" use12Hours={false} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  label="Work end"
+                  name="work_end"
+                  rules={[{ required: true, message: 'Work end is required' }]}
+                >
+                  <TimePicker size="large" format="HH:mm" use12Hours={false} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  label="Late threshold (minutes)"
+                  name="late_threshold_minutes"
+                  tooltip="Grace period after work start before a clock-in is marked late."
+                  rules={[{ required: true, message: 'Late threshold is required' }]}
+                >
+                  <InputNumber size="large" min={0} max={240} style={{ width: '100%' }} />
+                </Form.Item>
+              </div>
+            </Section>
+
+            {/* ===== BRANDING ===== */}
+            <Section
+              icon={<PictureOutlined />}
+              title="Login and register cover"
+              description="Background image shown on the sign-in and registration pages."
             >
-              <InputNumber min={0} max={240} style={{ width: '100%' }} />
-            </Form.Item>
-
-            <Divider />
-
-            {/* ===== BRANDING / COVER ===== */}
-            <Title level={5} style={{ marginTop: 0 }}>
-              <PictureOutlined /> Login / Register Cover
-            </Title>
-
-            <Space direction="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
               <div
                 style={{
-                  width: '100%',
-                  height: 180,
-                  borderRadius: 8,
-                  border: '1px dashed #cbd5e1',
+                  position: 'relative', height: 200, borderRadius: 10, overflow: 'hidden',
+                  border: `1px solid ${BORDER}`, marginBottom: 16,
                   backgroundImage: coverUrl
                     ? `url("${assetUrl(coverUrl)}")`
                     : 'linear-gradient(135deg, #065f46 0%, #047857 50%, #065f46 100%)',
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#fff',
-                  fontWeight: 500,
-                  textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                  backgroundSize: 'cover', backgroundPosition: 'center',
                 }}
               >
-                {!coverUrl && 'Default green gradient (no image set)'}
+                <div
+                  style={{
+                    position: 'absolute', right: 24, top: '50%', transform: 'translateY(-50%)',
+                    width: 150, padding: 14, borderRadius: 10, background: 'rgba(255,255,255,0.95)',
+                    boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+                  }}
+                >
+                  <div style={{ height: 8, width: 60, background: BRAND, borderRadius: 4, marginBottom: 12 }} />
+                  <div style={{ height: 14, background: '#e5e7eb', borderRadius: 4, marginBottom: 8 }} />
+                  <div style={{ height: 14, background: '#e5e7eb', borderRadius: 4, marginBottom: 12 }} />
+                  <div style={{ height: 16, background: BRAND, borderRadius: 4 }} />
+                </div>
+                <Tag style={{ position: 'absolute', left: 12, bottom: 12, margin: 0 }}>
+                  {coverUrl ? 'Custom cover' : 'Default theme'}
+                </Tag>
               </div>
 
               <Space wrap>
@@ -336,13 +489,11 @@ export default function Settings() {
                   accept="image/*"
                   showUploadList={false}
                   beforeUpload={(file) => {
-                    const isImage = /^image\//.test(file.type);
-                    if (!isImage) {
+                    if (!/^image\//.test(file.type)) {
                       toast.error('Only image files are allowed');
                       return Upload.LIST_IGNORE;
                     }
-                    const under5mb = file.size / 1024 / 1024 < 5;
-                    if (!under5mb) {
+                    if (file.size / 1024 / 1024 >= 5) {
                       toast.error('Image must be under 5 MB');
                       return Upload.LIST_IGNORE;
                     }
@@ -354,277 +505,229 @@ export default function Settings() {
                     Upload new cover
                   </Button>
                 </Upload>
-
                 {coverUrl && (
-                  <Button
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={resetCover}
-                    loading={uploadingCover}
-                  >
+                  <Button danger icon={<DeleteOutlined />} onClick={resetCover} loading={uploadingCover}>
                     Use default theme
                   </Button>
                 )}
               </Space>
-
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                Recommended: 1600×900 JPG or PNG, under 5 MB. Applied as the background
-                on the Login and Register pages. Leave empty for the default green theme.
+              <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 10 }}>
+                Best results: 1600x900 JPG or PNG, under 5 MB. Cover changes apply immediately and do not
+                need Save changes.
               </Text>
-            </Space>
-
-            <Divider />
+            </Section>
 
             {/* ===== GEOFENCE ===== */}
-            <Title level={5} style={{ marginTop: 0 }}>
-              <EnvironmentOutlined /> Office Location &amp; Geofence
-            </Title>
-
-            <Form.Item
-              label="Enforce GPS location on clock-in"
-              name="enforce_location"
-              valuePropName="checked"
-              extra="When ON, employees must be within the GPS radius of the office coordinates."
+            <Section
+              icon={<EnvironmentOutlined />}
+              title="Office location and geofence"
+              description="Limit on-site clock-ins to a radius around your office."
             >
-              <Switch checkedChildren="On" unCheckedChildren="Off" />
-            </Form.Item>
+              <ToggleRow
+                name="enforce_location"
+                title="Require GPS location on clock-in"
+                help="Employees must be within the radius of the office coordinates."
+              />
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Form.Item
-                label="Office Latitude"
-                name="office_lat"
-                rules={
-                  enforce
-                    ? [{ required: true, message: 'Latitude is required when enforcing' }]
-                    : []
-                }
-              >
-                <InputNumber
-                  step={0.0000001}
-                  precision={7}
-                  style={{ width: '100%' }}
-                  placeholder="-1.2921000"
-                />
-              </Form.Item>
-              <Form.Item
-                label="Office Longitude"
-                name="office_lng"
-                rules={
-                  enforce
-                    ? [{ required: true, message: 'Longitude is required when enforcing' }]
-                    : []
-                }
-              >
-                <InputNumber
-                  step={0.0000001}
-                  precision={7}
-                  style={{ width: '100%' }}
-                  placeholder="36.8219000"
-                />
-              </Form.Item>
-            </div>
-
-            <Form.Item
-              label="Geofence Radius (meters)"
-              name="geofence_radius_m"
-              extra="Recommended 100–300m. GPS accuracy is typically ±10–30m."
-            >
-              <InputNumber min={10} max={20000} step={10} style={{ width: '100%' }} />
-            </Form.Item>
-
-            <Button
-              icon={<AimOutlined />}
-              onClick={useMyLocation}
-              loading={locating}
-              className="mb-4"
-            >
-              Use my current location
-            </Button>
-
-            <Divider />
-
-            {/* ===== OFFICE NETWORK ===== */}
-            <Title level={5} style={{ marginTop: 0 }}>
-              <WifiOutlined /> Office Network (Allowed IPs)
-            </Title>
-
-            <Form.Item
-              label="Enforce office network on clock-in"
-              name="enforce_network"
-              valuePropName="checked"
-              extra="When ON, employees must be on the office Wi-Fi (matching the allowlist) to clock in on-site. Turn OFF for demos, training, or on-site without Wi-Fi."
-            >
-              <Switch checkedChildren="On" unCheckedChildren="Off" />
-            </Form.Item>
-
-            {enforceNetwork && (
-              <>
-                <Alert
-                  type="info"
-                  style={{ marginBottom: 12 }}
-                  icon={<WifiOutlined />}
-                  showIcon
-                  title={
-                    <Space wrap>
-                      <span>Your current public IP:</span>
-                      {ipLoading ? (
-                        <Spin size="small" />
-                      ) : currentIp ? (
-                        <Tag color="blue" style={{ fontFamily: 'monospace', fontSize: 13 }}>
-                          {currentIp}
-                        </Tag>
-                      ) : (
-                        <Tag color="red">Could not detect</Tag>
-                      )}
-                      <Button
-                        size="small"
-                        type="primary"
-                        ghost
-                        icon={<CopyOutlined />}
-                        onClick={addCurrentIpToAllowList}
-                        disabled={!currentIp}
-                      >
-                        Add to allowlist
-                      </Button>
-                      <Button size="small" onClick={loadCurrentIp} loading={ipLoading}>
-                        Refresh
-                      </Button>
-                    </Space>
-                  }
-                  description={
-                    <div style={{ fontSize: 13 }}>
-                      <div>
-                        This is the IP <strong>your browser</strong> is using right now
-                        (fetched directly from ipify).
-                      </div>
-                      {ipPreview && (
-                        <div style={{ marginTop: 6 }}>
-                          {ipPreview.matches ? (
-                            <Tag color="green" icon={<CheckCircleOutlined />}>
-                              This IP is already covered by the allowlist
-                            </Tag>
-                          ) : (
-                            <Tag color="orange" icon={<CloseCircleOutlined />}>
-                              Not in allowlist — employees on this network will be blocked
-                            </Tag>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  }
-                />
-
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Form.Item
-                  label={
-                    <Space>
-                      <WifiOutlined />
-                      <span>Allowed IPs (comma-separated)</span>
-                    </Space>
-                  }
-                  name="allowed_ips"
-                  rules={
-                    enforceNetwork
-                      ? [
-                          {
-                            validator: (_, value) => {
-                              const list = (value || '')
-                                .split(',')
-                                .map((x) => x.trim())
-                                .filter(Boolean);
-                              if (!list.length) {
-                                return Promise.reject(
-                                  new Error('At least one office IP is required when network enforcement is on')
-                                );
-                              }
-                              return Promise.resolve();
-                            },
-                          },
-                        ]
-                      : []
-                  }
-                  extra="Bare IPv4 (e.g. 41.90.64.10) or CIDR range (e.g. 41.90.64.0/24). Add the office's WAN IP — the one shown by ipify when you're on the office Wi-Fi."
+                  label="Office latitude"
+                  name="office_lat"
+                  rules={enforce ? [{ required: true, message: 'Latitude is required when enforcing' }] : []}
                 >
-                  <TextArea
-                    rows={2}
-                    placeholder="e.g. 41.90.64.10, 102.68.10.0/24"
-                    style={{ fontFamily: 'monospace' }}
-                  />
+                  <InputNumber size="large" step={0.0000001} precision={7} style={{ width: '100%' }} placeholder="-1.2921000" />
                 </Form.Item>
+                <Form.Item
+                  label="Office longitude"
+                  name="office_lng"
+                  rules={enforce ? [{ required: true, message: 'Longitude is required when enforcing' }] : []}
+                >
+                  <InputNumber size="large" step={0.0000001} precision={7} style={{ width: '100%' }} placeholder="36.8219000" />
+                </Form.Item>
+              </div>
 
-                {savedIps.length > 0 && (
-                  <div style={{ marginBottom: 16 }}>
-                    <Text type="secondary" style={{ fontSize: 12, marginRight: 6 }}>
-                      Saved ({savedIps.length}):
-                    </Text>
-                    {savedIps.map((ip) => (
-                      <Tag
-                        key={ip}
-                        closable
-                        onClose={(e) => {
-                          e.preventDefault();
-                          removeIpFromList(ip);
-                        }}
-                        style={{ fontFamily: 'monospace', marginBottom: 4 }}
-                      >
-                        {ip}
-                      </Tag>
-                    ))}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4" style={{ alignItems: 'end' }}>
+                <Form.Item
+                  label="Geofence radius (meters)"
+                  name="geofence_radius_m"
+                  extra="Recommended 100 to 300 m. GPS accuracy is typically 10 to 30 m."
+                >
+                  <InputNumber size="large" min={10} max={20000} step={10} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item>
+                  <Button size="large" icon={<AimOutlined />} onClick={useMyLocation} loading={locating} block>
+                    Use my current location
+                  </Button>
+                </Form.Item>
+              </div>
+            </Section>
+
+            {/* ===== NETWORK ===== */}
+            <Section
+              icon={<WifiOutlined />}
+              title="Office network"
+              description="Only allow on-site clock-ins from your office internet connection."
+            >
+              <ToggleRow
+                name="enforce_network"
+                title="Require office network on clock-in"
+                help="Employees must be on the office Wi-Fi to clock in on-site. Turn off for demos, training, or sites without Wi-Fi."
+              />
+
+              {enforceNetwork ? (
+                <>
+                  <div
+                    style={{
+                      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10,
+                      padding: '12px 16px', border: `1px solid ${BORDER}`, borderRadius: 10, marginBottom: 6,
+                    }}
+                  >
+                    <Text type="secondary">Your current public IP</Text>
+                    {ipLoading ? (
+                      <Spin size="small" />
+                    ) : currentIp ? (
+                      <Tag color="blue" style={{ fontFamily: 'monospace', fontSize: 13, margin: 0 }}>{currentIp}</Tag>
+                    ) : (
+                      <Tag color="red" style={{ margin: 0 }}>Could not detect</Tag>
+                    )}
+                    <div style={{ marginLeft: 'auto' }}>
+                      <Space wrap>
+                        <Button size="small" onClick={loadCurrentIp} loading={ipLoading} icon={<ReloadOutlined />}>
+                          Refresh
+                        </Button>
+                        <Button
+                          size="small"
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          onClick={addCurrentIpToAllowList}
+                          disabled={!currentIp}
+                        >
+                          Add to allowlist
+                        </Button>
+                      </Space>
+                    </div>
                   </div>
-                )}
-              </>
-            )}
-
-            {(enforce || enforceNetwork) && (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 16 }}
-                title="Employees can only clock in when all enabled conditions are met"
-                description={
-                  <>
-                    {enforceNetwork && (
-                      <>
-                        <strong>✓ Office network</strong> — device IP must be in the allowlist.
-                        <br />
-                      </>
-                    )}
-                    {enforce && (
-                      <>
-                        <strong>✓ GPS geofence</strong> — must be within the configured radius.
-                        <br />
-                      </>
-                    )}
-                    {!enforceNetwork && !enforce && (
-                      <>Both checks are off — any logged-in employee can clock in manually.</>
-                    )}
+                  <div style={{ marginBottom: 20 }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      The server checks the IP it actually sees on the socket, not what
-                      the browser claims. This is unspoofable.
+                      This is the IP your browser is using right now, detected through ipify.
                     </Text>
-                  </>
+                    {ipPreview && (
+                      <div style={{ marginTop: 8 }}>
+                        {ipPreview.matches ? (
+                          <Text style={{ color: '#15803d' }}>
+                            <CheckCircleFilled /> This IP is covered by the allowlist
+                          </Text>
+                        ) : (
+                          <Text style={{ color: '#c2410c' }}>
+                            <CloseCircleFilled /> Not in the allowlist. Employees on this network will be blocked.
+                          </Text>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <Form.Item
+                    label="Allowed IPs (comma-separated)"
+                    name="allowed_ips"
+                    rules={[
+                      {
+                        validator: (_, value) => {
+                          const list = (value || '').split(',').map((x) => x.trim()).filter(Boolean);
+                          if (!list.length) {
+                            return Promise.reject(
+                              new Error('Add at least one office IP while network enforcement is on')
+                            );
+                          }
+                          return Promise.resolve();
+                        },
+                      },
+                    ]}
+                    extra="Use a single IPv4 address (41.90.64.10) or a CIDR range (41.90.64.0/24). Add the office WAN IP shown by ipify when you are on the office Wi-Fi."
+                  >
+                    <TextArea rows={2} placeholder="e.g. 41.90.64.10, 102.68.10.0/24" style={{ fontFamily: 'monospace' }} />
+                  </Form.Item>
+
+                  {savedIps.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }}>
+                        Allowed ({savedIps.length})
+                      </Text>
+                      {savedIps.map((ip) => (
+                        <Tag
+                          key={ip}
+                          closable
+                          onClose={(e) => {
+                            e.preventDefault();
+                            removeIpFromList(ip);
+                          }}
+                          style={{ fontFamily: 'monospace', marginBottom: 4 }}
+                        >
+                          {ip}
+                        </Tag>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <Text type="secondary">Network checks are off. Any IP address can clock in.</Text>
+              )}
+
+              <Alert
+                type={enforce || enforceNetwork ? 'warning' : 'info'}
+                showIcon
+                style={{ marginTop: 16 }}
+                title={
+                  enforce || enforceNetwork
+                    ? 'Clock-in needs every enabled check to pass'
+                    : 'Both checks are off'
+                }
+                description={
+                  enforce || enforceNetwork ? (
+                    <>
+                      {enforceNetwork && <div>Office network: the device IP must be in the allowlist.</div>}
+                      {enforce && <div>GPS geofence: the device must be within the configured radius.</div>}
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        The server checks the IP it sees on the connection, not what the browser reports.
+                      </Text>
+                    </>
+                  ) : (
+                    'Any logged-in employee can clock in manually.'
+                  )
                 }
               />
-            )}
+            </Section>
 
-            <Divider />
-
-            <Space>
-              <Button
-                type="primary"
-                htmlType="submit"
-                icon={<SaveOutlined />}
-                loading={saving}
-              >
-                Save Changes
-              </Button>
-              <Button icon={<ReloadOutlined />} onClick={load} disabled={saving}>
-                Reset
-              </Button>
-            </Space>
+            {/* ===== STICKY ACTION BAR ===== */}
+            <div
+              style={{
+                position: 'sticky', bottom: 0, zIndex: 20, margin: '0 -16px 20px', padding: '12px 16px',
+                background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)',
+                borderTop: `1px solid ${BORDER}`, display: 'flex', alignItems: 'center',
+                justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+              }}
+            >
+              <div>
+                {dirty ? (
+                  <Tag color="gold" style={{ margin: 0 }}>Unsaved changes</Tag>
+                ) : (
+                  <Text type="secondary">All changes saved</Text>
+                )}
+              </div>
+              <Space>
+                <Button icon={<ReloadOutlined />} onClick={load} disabled={saving || !dirty}>
+                  Discard changes
+                </Button>
+                <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving} disabled={!dirty}>
+                  Save changes
+                </Button>
+              </Space>
+            </div>
           </Form>
-        )}
-      </Card>
+        </>
+      )}
+
       <EmailSenderSettings />
+      <div style={{ height: 24 }} />
     </div>
   );
 }
