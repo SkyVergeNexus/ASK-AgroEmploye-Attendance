@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  Card, Table, Tag, Typography, Space, DatePicker, Row, Col, Statistic,
-  Select, Button, Grid, Empty, message, Badge, Image, Modal, Descriptions, Divider,
+  Table, Tag, Typography, Space, DatePicker, Select, Button, Grid, Empty,
+  message, Image, Modal, Descriptions, Divider, ConfigProvider,
 } from 'antd';
 import {
-  ReloadOutlined, ClockCircleOutlined, CalendarOutlined, EyeOutlined, EnvironmentOutlined,
-  CameraOutlined, FileTextOutlined, HomeOutlined, WifiOutlined,
+  ReloadOutlined, ClockCircleOutlined, CalendarOutlined, EyeOutlined,
+  EnvironmentOutlined, CameraOutlined, FileTextOutlined, HomeOutlined,
+  WifiOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
@@ -16,7 +17,7 @@ import { attendanceClockOutLabel } from '../utils/attendanceRecordLabel';
 
 dayjs.extend(isoWeek);
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { RangePicker } = DatePicker;
 const { useBreakpoint } = Grid;
 
@@ -29,27 +30,137 @@ const statusColor = {
 };
 
 const STATUS_META = {
-  present: { accent: '#16a34a', bg: '#ecfdf5', text: '#065f46', label: 'Present' },
-  late: { accent: '#d97706', bg: '#fffbeb', text: '#92400e', label: 'Late' },
-  absent: { accent: '#dc2626', bg: '#fef2f2', text: '#991b1b', label: 'Absent' },
-  'half-day': { accent: '#1677ff', bg: '#eff6ff', text: '#1e40af', label: 'Half Day' },
-  leave: { accent: '#7c3aed', bg: '#f5f3ff', text: '#5b21b6', label: 'Leave' },
+  present: { accent: '#3f6b3a', bg: '#e6f0e3', label: 'Present' },
+  late: { accent: '#b7791f', bg: '#fdf3e1', label: 'Late' },
+  absent: { accent: '#b42318', bg: '#fdeceb', label: 'Absent' },
+  'half-day': { accent: '#2563a8', bg: '#e8f0fa', label: 'Half day' },
+  leave: { accent: '#6d4aa8', bg: '#f0eafa', label: 'Leave' },
 };
 
-const statusOptions = [
-  { value: 'present', label: 'Present' },
-  { value: 'late', label: 'Late' },
-  { value: 'absent', label: 'Absent' },
-  { value: 'half-day', label: 'Half Day' },
-  { value: 'leave', label: 'Leave' },
-];
+const statusOptions = Object.entries(STATUS_META).map(([value, m]) => ({
+  value,
+  label: m.label,
+}));
 
 const QUICK_OPTIONS = [
   { value: 'today', label: 'Today' },
-  { value: 'week', label: 'Week' },
-  { value: 'month', label: 'Month' },
-  { value: 'last30', label: '30 days' },
+  { value: 'week', label: 'This week' },
+  { value: 'month', label: 'This month' },
+  { value: 'last30', label: 'Last 30 days' },
 ];
+
+// ═══════════ Brand styles (cocoa, matches Dashboard) ═══════════
+const CSS = `
+.ah-root {
+  --cc-bean: #2a1810;
+  --cc-roast: #4a2c1a;
+  --cc-husk: #7a5236;
+  --cc-gold: #d9a441;
+  --cc-leaf: #3f6b3a;
+  --cc-paper: #f3efea;
+  --cc-line: #e6ded4;
+  --cc-ink: #26170f;
+  --cc-muted: #85705f;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--cc-ink);
+  background: var(--cc-paper);
+  min-height: 100%;
+  padding: 16px;
+}
+.ah-wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+.ah-serif { font-family: 'Fraunces', Georgia, 'Times New Roman', serif; }
+
+.ah-hero {
+  position: relative; overflow: hidden; color: #fff;
+  border-radius: 28px 28px 28px 8px; padding: 24px 26px;
+  background:
+    radial-gradient(700px 240px at 90% -20%, rgba(217,164,65,0.28), transparent 60%),
+    linear-gradient(140deg, #2a1810 0%, #3b2214 55%, #4a2c1a 100%);
+  box-shadow: 0 18px 40px -22px rgba(42,24,16,0.7);
+  display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.ah-hero-pods { position: absolute; right: 90px; top: -30px; opacity: 0.08; pointer-events: none; }
+.ah-title { font-size: 28px; font-weight: 600; margin: 0; line-height: 1.15; position: relative; }
+.ah-sub { color: rgba(255,255,255,0.72); font-size: 13px; margin-top: 4px; position: relative; }
+.ah-refresh { position: relative; }
+
+.ah-panel { background: #fff; border: 1px solid var(--cc-line); border-radius: 20px; padding: 18px 20px; }
+.ah-filters { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px 24px; align-items: end; }
+.ah-field-label { font-size: 12px; color: var(--cc-muted); margin-bottom: 6px; font-weight: 500; }
+.ah-quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.ah-qbtn {
+  border: 1px solid var(--cc-line); background: #faf7f3; color: var(--cc-roast);
+  padding: 6px 14px; border-radius: 999px; font-size: 13px; cursor: pointer; font-weight: 500;
+  transition: background 150ms, color 150ms, border-color 150ms;
+}
+.ah-qbtn:hover { border-color: var(--cc-husk); }
+.ah-qbtn:focus-visible, .ah-stat:focus-visible { outline: 2px solid var(--cc-gold); outline-offset: 2px; }
+.ah-qbtn.is-on { background: var(--cc-roast); color: #fff; border-color: var(--cc-roast); }
+
+.ah-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.ah-stat {
+  text-align: left; cursor: pointer; background: #fff; border: 1px solid var(--cc-line);
+  border-radius: 16px; padding: 12px 14px; font: inherit; color: inherit;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+.ah-stat.is-on { border-color: var(--stat); box-shadow: 0 0 0 2px var(--stat) inset; }
+.ah-stat-num { font-size: 26px; font-weight: 700; line-height: 1.1; color: var(--stat); }
+.ah-stat-label { font-size: 12px; color: var(--cc-muted); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+.ah-stat-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--stat); }
+
+.ah-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.ah-h { font-size: 18px; font-weight: 600; margin: 0; color: var(--cc-roast); }
+
+.ah-rec {
+  border: 1px solid var(--cc-line); border-left: 4px solid var(--accent);
+  border-radius: 8px 16px 16px 8px; padding: 12px 14px; margin-bottom: 10px; background: #fff;
+}
+.ah-rec-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ah-rec-times { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #faf7f3; border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+.ah-rec-label { font-size: 11px; color: var(--cc-muted); }
+.ah-num { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; margin-top: 2px; }
+
+.ah-note-box { border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.6; word-break: break-word; }
+
+@media (max-width: 860px) {
+  .ah-filters { grid-template-columns: 1fr; }
+  .ah-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .ah-root { padding: 10px; }
+  .ah-hero { padding: 18px; border-radius: 22px 22px 22px 6px; }
+  .ah-title { font-size: 22px; }
+  .ah-panel { padding: 14px; border-radius: 16px; }
+  .ah-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ah-root .ant-picker { width: 100%; }
+}
+.ant-picker-dropdown { max-width: 100vw; }
+.ant-picker-dropdown .ant-picker-panel-container { max-width: calc(100vw - 16px); }
+`;
+
+const antTheme = {
+  token: {
+    colorPrimary: '#4a2c1a',
+    colorSuccess: '#3f6b3a',
+    colorWarning: '#b7791f',
+    colorError: '#b42318',
+    borderRadius: 10,
+    fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
+  },
+};
+
+function HeroPods() {
+  return (
+    <div className="ah-hero-pods" aria-hidden="true">
+      <svg width="220" height="170" viewBox="0 0 320 240" fill="none">
+        <g fill="#fff">
+          <path d="M70 20c40 20 60 58 60 88s-20 70-60 88c-40-18-60-58-60-88S30 40 70 20z" />
+          <path d="M200 60c30 15 45 44 45 66s-15 52-45 66c-30-14-45-44-45-66s15-51 45-66z" />
+        </g>
+      </svg>
+    </div>
+  );
+}
 
 export default function AttendanceHistory() {
   const [rows, setRows] = useState([]);
@@ -129,18 +240,21 @@ export default function AttendanceHistory() {
     return rows.filter((r) => statusFilter.includes(r.status));
   }, [rows, statusFilter]);
 
-  const showSummary = quickRange !== 'month' || statusFilter.length > 0;
-  const summaryTitle = statusFilter.length === 1
-    ? STATUS_META[statusFilter[0]]?.label || statusFilter[0]
-    : 'Matching records';
+  const counts = useMemo(() => {
+    const c = {};
+    rows.forEach((r) => { c[r.status] = (c[r.status] || 0) + 1; });
+    return c;
+  }, [rows]);
 
-  // 5 core columns only — everything else moves to the detail modal
+  const toggleStatus = (key) =>
+    setStatusFilter((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
+
   const columns = [
     {
       title: 'Date',
       dataIndex: 'attendance_date',
       key: 'attendance_date',
-      render: (v) => String(v).slice(0, 10),
+      render: (v) => <Text strong>{String(v).slice(0, 10)}</Text>,
       sorter: (a, b) =>
         String(a.attendance_date).localeCompare(String(b.attendance_date)),
       defaultSortOrder: 'descend',
@@ -155,7 +269,8 @@ export default function AttendanceHistory() {
       title: 'Clock Out',
       dataIndex: 'clock_out',
       key: 'clock_out',
-      render: (_, r) => (
+      // FIX: first argument must be `v` (the cell value), not `_`
+      render: (v, r) => (
         <Space size={4}>
           {v || <Text type="secondary">{attendanceClockOutLabel(r)}</Text>}
           <AttendanceRecordTag record={r} />
@@ -170,7 +285,7 @@ export default function AttendanceHistory() {
       dataIndex: 'clock_in_mode',
       key: 'clock_in_mode',
       render: (v) => (
-        <Tag color={v === 'remote' ? 'purple' : 'blue'}>
+        <Tag color={v === 'remote' ? 'purple' : 'blue'} style={{ borderRadius: 999 }}>
           {v === 'remote' ? 'Remote' : 'On-site'}
         </Tag>
       ),
@@ -180,7 +295,7 @@ export default function AttendanceHistory() {
       dataIndex: 'status',
       key: 'status',
       render: (v) => (
-        <Tag color={statusColor[v] || 'default'}>
+        <Tag color={statusColor[v] || 'default'} style={{ borderRadius: 999 }}>
           {STATUS_META[v]?.label || v}
         </Tag>
       ),
@@ -188,104 +303,55 @@ export default function AttendanceHistory() {
     {
       title: '',
       key: 'actions',
-      width: 90,
+      width: 100,
       align: 'right',
       render: (_, r) => (
-        <Button
-          type="primary"
-          ghost
-          size="small"
-          icon={<EyeOutlined />}
-          onClick={() => setViewing(r)}
-        >
+        <Button type="primary" ghost size="small" icon={<EyeOutlined />} onClick={() => setViewing(r)}>
           View
         </Button>
       ),
     },
   ];
 
-  // ── Mobile compact card — 5 fields + View button ──
+  // ── Mobile card ──
   const renderMobileCard = (r) => {
-    const meta = STATUS_META[r.status] || {
-      accent: '#94a3b8', bg: '#f8fafc', text: '#475569', label: r.status,
-    };
+    const meta = STATUS_META[r.status] || { accent: '#85705f', bg: '#f3efea', label: r.status };
     const isRemote = r.clock_in_mode === 'remote';
 
     return (
-      <div
-        key={r.id}
-        style={{
-          background: '#fff',
-          border: '1px solid #e2e8f0',
-          borderLeft: `4px solid ${meta.accent}`,
-          borderRadius: 12,
-          padding: '12px 14px',
-          marginBottom: 10,
-          width: '100%',
-          maxWidth: '100%',
-          boxSizing: 'border-box',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+      <div key={r.id} className="ah-rec" style={{ '--accent': meta.accent }}>
+        <div className="ah-rec-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <div
               style={{
-                width: 36, height: 36, borderRadius: 10,
-                background: meta.bg, color: meta.accent,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 15, flexShrink: 0,
+                width: 36, height: 36, borderRadius: 10, background: meta.bg, color: meta.accent,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0,
               }}
             >
               <ClockCircleOutlined />
             </div>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', lineHeight: 1.2 }}>
-                {String(r.attendance_date).slice(0, 10)}
-              </div>
-              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+              <div style={{ fontWeight: 700 }}>{String(r.attendance_date).slice(0, 10)}</div>
+              <div style={{ fontSize: 12, color: '#85705f' }}>
                 {r.status === 'leave'
                   ? 'Approved leave'
-                  : `${isRemote ? 'Remote' : 'On-site'} · ${r.early_leave_reason ? 'Left early' : 'Full day'}`}
+                  : `${isRemote ? 'Remote' : 'On-site'}, ${r.early_leave_reason ? 'left early' : 'full day'}`}
               </div>
             </div>
           </div>
-          <Tag
-            color={statusColor[r.status] || 'default'}
-            style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize', flexShrink: 0, fontWeight: 600, fontSize: 11 }}
-          >
+          <Tag color={statusColor[r.status] || 'default'} style={{ margin: 0, borderRadius: 999, flexShrink: 0 }}>
             {meta.label}
           </Tag>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 8,
-            background: '#f8fafc',
-            borderRadius: 10,
-            padding: '10px 12px',
-            marginTop: 10,
-          }}
-        >
+        <div className="ah-rec-times">
           <div>
-            <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600 }}>
-              Clock In
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#16a34a', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
-              {r.clock_in || '—'}
-            </div>
+            <div className="ah-rec-label">Clock in</div>
+            <div className="ah-num" style={{ color: '#2f5230' }}>{r.clock_in || '—'}</div>
           </div>
-          <div style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: 10 }}>
-            <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600 }}>
-              Clock Out
-            </div>
-            <div
-              style={{
-                fontSize: 15, fontWeight: 700, marginTop: 2, fontVariantNumeric: 'tabular-nums',
-                color: r.clock_out ? '#d97706' : '#94a3b8',
-              }}
-            >
+          <div>
+            <div className="ah-rec-label">Clock out</div>
+            <div className="ah-num" style={{ color: r.clock_out ? '#4a2c1a' : '#b3a595' }}>
               {r.clock_out || '—'}
             </div>
             <AttendanceRecordTag record={r} />
@@ -299,7 +365,7 @@ export default function AttendanceHistory() {
           size="small"
           icon={<EyeOutlined />}
           onClick={() => setViewing(r)}
-          style={{ marginTop: 10, borderRadius: 8 }}
+          style={{ marginTop: 10 }}
         >
           View details
         </Button>
@@ -307,13 +373,104 @@ export default function AttendanceHistory() {
     );
   };
 
-  // ── Detail modal — full activity for one day ──
+  // ── Detail modal ──
   const renderDetailModal = () => {
     if (!viewing) return null;
     const r = viewing;
-    const meta = STATUS_META[r.status] || { label: r.status, accent: '#94a3b8' };
+    const meta = STATUS_META[r.status] || { label: r.status, accent: '#85705f' };
     const isRemote = r.clock_in_mode === 'remote';
     const hasCoord = r.clock_in_lat != null && r.clock_in_lng != null;
+
+    const items = [
+      {
+        key: 'in',
+        label: 'Clock in',
+        children: <Text strong style={{ color: '#2f5230' }}>{r.clock_in || '—'}</Text>,
+      },
+      {
+        key: 'out',
+        label: 'Clock out',
+        children: (
+          <Text strong style={{ color: r.clock_out ? '#4a2c1a' : '#b3a595' }}>
+            {attendanceClockOutLabel(r)}
+          </Text>
+        ),
+      },
+      {
+        key: 'status',
+        label: 'Status',
+        children: (
+          <Tag color={statusColor[r.status] || 'default'} style={{ borderRadius: 999 }}>
+            {meta.label}
+          </Tag>
+        ),
+      },
+      {
+        key: 'mode',
+        label: 'Mode',
+        children: (
+          <Tag color={r.status === 'leave' || isRemote ? 'purple' : 'blue'} style={{ borderRadius: 999 }}>
+            {r.status === 'leave' ? 'Leave' : isRemote ? 'Remote' : 'On-site'}
+          </Tag>
+        ),
+      },
+      {
+        key: 'record',
+        label: 'Record',
+        span: 2,
+        children: (
+          <>
+            <AttendanceRecordTag record={r} />
+            {!r.admin_resolved && !r.auto_clocked_out && !r.needs_review && 'Employee clock-out'}
+          </>
+        ),
+      },
+    ];
+
+    if (r.admin_resolved) {
+      items.push(
+        {
+          key: 'reviewed',
+          label: 'Reviewed at',
+          span: 2,
+          children: r.admin_resolved_at
+            ? dayjs(r.admin_resolved_at).format('DD MMM YYYY, HH:mm')
+            : 'Not recorded',
+        },
+        {
+          key: 'admin-reason',
+          label: 'Admin reason',
+          span: 2,
+          children: r.admin_resolved_reason || <Text type="secondary">Not provided</Text>,
+        }
+      );
+    }
+    if (r.needs_review) {
+      items.push({
+        key: 'review',
+        label: 'Review note',
+        span: 2,
+        children: r.review_note || 'Presence could not be verified at closing',
+      });
+    }
+    if (r.auto_clocked_out) {
+      items.push({
+        key: 'auto',
+        label: 'Auto clock-out',
+        span: 2,
+        children: r.auto_clock_out_reason || 'Departure was detected after closing',
+      });
+    }
+    if (r.status === 'leave') {
+      items.push({
+        key: 'leave-note',
+        label: 'Note',
+        span: 2,
+        children: r.notes || 'Approved leave',
+      });
+    }
+
+    const labelStyle = { width: 130, background: '#faf7f3', fontWeight: 600 };
 
     return (
       <Modal
@@ -321,106 +478,51 @@ export default function AttendanceHistory() {
         onCancel={() => setViewing(null)}
         footer={<Button onClick={() => setViewing(null)}>Close</Button>}
         centered
-        width={isMobile ? 'calc(100vw - 24px)' : 620}
+        width={isMobile ? 'calc(100vw - 24px)' : 640}
         styles={{ body: { maxHeight: '75vh', overflowY: 'auto' } }}
         title={
           <Space>
-            <span>Attendance details</span>
-            <Tag color={statusColor[r.status] || 'default'} style={{ marginLeft: 6 }}>
+            <span className="ah-serif" style={{ fontSize: 17, fontWeight: 600 }}>Attendance details</span>
+            <Tag color={statusColor[r.status] || 'default'} style={{ borderRadius: 999 }}>
               {meta.label}
             </Tag>
           </Space>
         }
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {/* Summary card */}
-          <Card
-            size="small"
-            bordered={false}
+          <div
             style={{
-              background: isRemote ? '#faf5ff' : '#eff6ff',
-              border: `1px solid ${isRemote ? '#e9d5ff' : '#bfdbfe'}`,
-              borderRadius: 12,
+              display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
+              borderRadius: 14,
+              background: isRemote ? '#f0eafa' : '#f5f9f3',
+              border: `1px solid ${isRemote ? '#ddd0f2' : '#cfe0c9'}`,
             }}
           >
-            <Space size={10} align="center">
-              {r.status === 'leave' ? (
-                <CalendarOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
-              ) : isRemote ? (
-                <HomeOutlined style={{ fontSize: 20, color: '#7c3aed' }} />
-              ) : (
-                <WifiOutlined style={{ fontSize: 20, color: '#1677ff' }} />
-              )}
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
-                  {r.status === 'leave' ? 'Approved leave' : isRemote ? 'Remote work day' : 'On-site work day'}
-                </div>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {String(r.attendance_date).slice(0, 10)}
-                </Text>
+            {r.status === 'leave' ? (
+              <CalendarOutlined style={{ fontSize: 20, color: '#6d4aa8' }} />
+            ) : isRemote ? (
+              <HomeOutlined style={{ fontSize: 20, color: '#6d4aa8' }} />
+            ) : (
+              <WifiOutlined style={{ fontSize: 20, color: '#3f6b3a' }} />
+            )}
+            <div>
+              <div style={{ fontWeight: 700 }}>
+                {r.status === 'leave' ? 'Approved leave' : isRemote ? 'Remote work day' : 'On-site work day'}
               </div>
-            </Space>
-          </Card>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {String(r.attendance_date).slice(0, 10)}
+              </Text>
+            </div>
+          </div>
 
-          {/* Time block */}
           <Descriptions
             column={2}
             size="small"
             bordered
-            labelStyle={{ width: 120, background: '#f8fafc', fontWeight: 600 }}
-          >
-            <Descriptions.Item label="Clock in">
-              <Text strong style={{ color: '#16a34a' }}>{r.clock_in || '—'}</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="Clock out">
-              <Text strong style={{ color: r.clock_out ? '#d97706' : '#94a3b8' }}>
-                {attendanceClockOutLabel(r)}
-              </Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="Status">
-              <Tag color={statusColor[r.status] || 'default'}>
-                {meta.label}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Mode">
-              <Tag color={r.status === 'leave' || isRemote ? 'purple' : 'blue'}>
-                {r.status === 'leave' ? 'Leave' : isRemote ? 'Remote' : 'On-site'}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Record">
-              <AttendanceRecordTag record={r} />
-              {!r.admin_resolved && !r.auto_clocked_out && !r.needs_review && 'Employee clock-out'}
-            </Descriptions.Item>
-            {r.admin_resolved && (
-              <>
-                <Descriptions.Item label="Reviewed at">
-                  {r.admin_resolved_at
-                    ? dayjs(r.admin_resolved_at).format('DD MMM YYYY, HH:mm')
-                    : 'Not recorded'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Admin reason" span={2}>
-                  {r.admin_resolved_reason || <Text type="secondary">Not provided</Text>}
-                </Descriptions.Item>
-              </>
-            )}
-            {r.needs_review && (
-              <Descriptions.Item label="Review note" span={2}>
-                {r.review_note || 'Presence could not be verified at closing'}
-              </Descriptions.Item>
-            )}
-            {r.auto_clocked_out && (
-              <Descriptions.Item label="Auto clock-out detail" span={2}>
-                {r.auto_clock_out_reason || 'Departure was detected after closing'}
-              </Descriptions.Item>
-            )}
-            {r.status === 'leave' && (
-              <Descriptions.Item label="Attendance note" span={2}>
-                {r.notes || 'Approved leave'}
-              </Descriptions.Item>
-            )}
-          </Descriptions>
+            items={items}
+            styles={{ label: labelStyle }}
+          />
 
-          {/* Remote-specific block */}
           {isRemote && (
             <>
               <Divider style={{ margin: '4px 0' }}>Remote activity</Divider>
@@ -429,339 +531,214 @@ export default function AttendanceHistory() {
                 column={1}
                 size="small"
                 bordered
-                labelStyle={{ width: 140, background: '#f8fafc', fontWeight: 600 }}
-              >
-                <Descriptions.Item
-                  label={<><EnvironmentOutlined /> Reported work location</>}
-                >
-                  {r.remote_location || <Text type="secondary">Not recorded</Text>}
-                </Descriptions.Item>
-                <Descriptions.Item label="GPS coordinates">
-                  {hasCoord ? (
-                    <Text code style={{ fontSize: 12 }}>
-                      {r.clock_in_lat}, {r.clock_in_lng}
-                    </Text>
-                  ) : (
-                    <Text type="secondary">Not captured</Text>
-                  )}
-                </Descriptions.Item>
-                <Descriptions.Item
-                  label={<><CameraOutlined /> Selfie</>}
-                >
-                  {r.remote_selfie ? (
-                    <Image
-                      src={assetUrl(r.remote_selfie)}
-                      alt="Remote clock-in selfie"
-                      width={160}
-                      style={{ borderRadius: 8, border: '1px solid #e2e8f0' }}
-                    />
-                  ) : (
-                    <Text type="secondary">Not uploaded</Text>
-                  )}
-                </Descriptions.Item>
-              </Descriptions>
+                styles={{ label: { ...labelStyle, width: 160 } }}
+                items={[
+                  {
+                    key: 'loc',
+                    label: <><EnvironmentOutlined /> Work location</>,
+                    children: r.remote_location || <Text type="secondary">Not recorded</Text>,
+                  },
+                  {
+                    key: 'gps',
+                    label: 'GPS coordinates',
+                    children: hasCoord ? (
+                      <Text code style={{ fontSize: 12 }}>{r.clock_in_lat}, {r.clock_in_lng}</Text>
+                    ) : (
+                      <Text type="secondary">Not captured</Text>
+                    ),
+                  },
+                  {
+                    key: 'selfie',
+                    label: <><CameraOutlined /> Selfie</>,
+                    children: r.remote_selfie ? (
+                      <Image
+                        src={assetUrl(r.remote_selfie)}
+                        alt="Remote clock-in selfie"
+                        width={160}
+                        style={{ borderRadius: 10, border: '1px solid #e6ded4' }}
+                      />
+                    ) : (
+                      <Text type="secondary">Not uploaded</Text>
+                    ),
+                  },
+                ]}
+              />
 
               <div>
                 <Space size={6} style={{ marginBottom: 8 }}>
-                  <FileTextOutlined style={{ color: '#065f46' }} />
+                  <FileTextOutlined style={{ color: '#4a2c1a' }} />
                   <Text strong>Tasks completed</Text>
                 </Space>
                 {r.tasks_completed ? (
                   <div
+                    className="ah-note-box"
                     style={{
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 10,
-                      padding: '12px 14px',
-                      fontSize: 13,
-                      lineHeight: 1.7,
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      color: '#0f172a',
+                      background: '#faf7f3', border: '1px solid #e6ded4',
+                      whiteSpace: 'pre-wrap', lineHeight: 1.7,
                     }}
                   >
                     {r.tasks_completed}
                   </div>
                 ) : (
-                  <Text type="secondary" style={{ fontSize: 13 }}>
-                    Not submitted yet.
-                  </Text>
+                  <Text type="secondary" style={{ fontSize: 13 }}>Not submitted yet.</Text>
                 )}
               </div>
             </>
           )}
 
-          {/* Early leave block */}
           {r.early_leave_reason && (
             <>
               <Divider style={{ margin: '4px 0' }}>Early leave</Divider>
               <div
-                style={{
-                  background: '#fffbeb',
-                  border: '1px solid #fde68a',
-                  borderRadius: 10,
-                  padding: '12px 14px',
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  color: '#92400e',
-                  wordBreak: 'break-word',
-                }}
+                className="ah-note-box"
+                style={{ background: '#fdf3e1', border: '1px solid #f1dcae', color: '#7a4a12' }}
               >
                 <strong>Reason:</strong> {r.early_leave_reason}
               </div>
             </>
           )}
 
-          {/* Audit footnote */}
           <Text type="secondary" style={{ fontSize: 11 }}>
-            Record ID #{r.id} · Logged on {String(r.created_at || '').slice(0, 19).replace('T', ' ')}
+            Record ID #{r.id}, logged on {String(r.created_at || '').slice(0, 19).replace('T', ' ')}
           </Text>
         </Space>
       </Modal>
     );
   };
 
-  // ═══════════════ MOBILE LAYOUT ═══════════════
-  if (isMobile) {
-    return (
-      <div
-        className="mobile-history"
-        style={{
-          padding: '14px 10px',
-          width: '100%',
-          maxWidth: '100vw',
-          boxSizing: 'border-box',
-          overflowX: 'hidden',
-        }}
-      >
-        <style>{`
-          .mobile-history .ant-card,
-          .mobile-history .ant-card-body,
-          .mobile-history .ant-picker,
-          .mobile-history .ant-select,
-          .mobile-history .ant-select-selector,
-          .mobile-history .ant-picker-input,
-          .mobile-history .ant-empty {
-            max-width: 100% !important;
-            min-width: 0 !important;
-            box-sizing: border-box !important;
-          }
-          .mobile-history .ant-picker { width: 100% !important; }
-          .mobile-history .ant-select { width: 100% !important; }
-          .mobile-history .ant-select-selector { width: 100% !important; }
-          .mobile-history .ant-picker-input > input { font-size: 12px !important; }
-          .mobile-history .ant-picker-range-separator { padding: 0 4px !important; }
-          .mobile-history .ant-btn { min-width: 0; }
-          .mobile-history ~ .ant-picker-dropdown .ant-picker-panels { flex-direction: column !important; }
-          .ant-picker-dropdown { max-width: 100vw; }
-          .ant-picker-dropdown .ant-picker-panel-container { max-width: calc(100vw - 16px); }
-        `}</style>
+  const rangeLabel = `${range[0].format('DD MMM')} to ${range[1].format('DD MMM YYYY')}`;
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 8 }}>
-          <div style={{ minWidth: 0 }}>
-            <Title level={4} style={{ margin: 0, color: '#065f46', fontSize: 18, lineHeight: 1.2 }}>
-              Attendance History
-            </Title>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              {filtered.length} record{filtered.length === 1 ? '' : 's'} · {range[0].format('DD MMM')} – {range[1].format('DD MMM')}
-            </Text>
-          </div>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => load(range[0], range[1])}
-            loading={loading}
-            size="small"
-            style={{ flexShrink: 0 }}
-          />
-        </div>
+  return (
+    <ConfigProvider theme={antTheme}>
+      <div className="ah-root">
+        <style>{CSS}</style>
 
-        <Card
-          bordered={false}
-          style={{ marginBottom: 14, borderRadius: 14, boxShadow: '0 4px 14px rgba(15,23,42,0.06)' }}
-          styles={{ body: { padding: 14 } }}
-        >
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6, marginBottom: 12, width: '100%' }}>
-            {QUICK_OPTIONS.map((opt) => (
-              <Button
-                key={opt.value}
-                size="small"
-                type={quickRange === opt.value ? 'primary' : 'default'}
-                onClick={() => applyQuick(opt.value)}
-                style={{
-                  fontSize: 11, padding: 0, height: 32, borderRadius: 8,
-                  width: '100%', minWidth: 0,
-                  fontWeight: quickRange === opt.value ? 600 : 500,
-                }}
+        <div className="ah-wrap">
+          {/* Header */}
+          <header className="ah-hero">
+            <HeroPods />
+            <div>
+              <h1 className="ah-title ah-serif">My attendance</h1>
+              <div className="ah-sub">
+                {rows.length} record{rows.length === 1 ? '' : 's'} from {rangeLabel}
+              </div>
+            </div>
+            <Button
+              className="ah-refresh"
+              icon={<ReloadOutlined />}
+              onClick={() => load(range[0], range[1])}
+              loading={loading}
+            >
+              Refresh
+            </Button>
+          </header>
+
+          {/* Filters */}
+          <section className="ah-panel ah-filters">
+            <div>
+              <div className="ah-field-label">Period</div>
+              <div className="ah-quick">
+                {QUICK_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className={`ah-qbtn${quickRange === opt.value ? ' is-on' : ''}`}
+                    onClick={() => applyQuick(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="ah-field-label">Custom dates</div>
+              <RangePicker
+                value={range}
+                onChange={applyRange}
+                allowClear={false}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div className="ah-field-label">Status</div>
+              <Select
+                mode="multiple"
+                placeholder="Any status"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={statusOptions}
+                allowClear
+                style={{ width: '100%', maxWidth: isMobile ? '100%' : 420 }}
+                maxTagCount="responsive"
+              />
+            </div>
+          </section>
+
+          {/* Status counts (tap to filter) */}
+          <section className="ah-stats" aria-label="Records by status">
+            {Object.entries(STATUS_META).map(([key, m]) => (
+              <button
+                key={key}
+                type="button"
+                className={`ah-stat${statusFilter.includes(key) ? ' is-on' : ''}`}
+                style={{ '--stat': m.accent }}
+                onClick={() => toggleStatus(key)}
+                aria-pressed={statusFilter.includes(key)}
               >
-                {opt.label}
-              </Button>
+                <div className="ah-stat-num ah-serif">{counts[key] || 0}</div>
+                <div className="ah-stat-label">
+                  <span className="ah-stat-dot" />
+                  {m.label}
+                </div>
+              </button>
             ))}
-          </div>
+          </section>
 
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 6 }}>
-              Custom Range
+          {/* Records */}
+          <section className="ah-panel">
+            <div className="ah-panel-head">
+              <h2 className="ah-h ah-serif">Records</h2>
+              <Space>
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                  Showing {filtered.length}
+                </Text>
+                {statusFilter.length > 0 && (
+                  <Button type="link" size="small" onClick={() => setStatusFilter([])} style={{ padding: 0 }}>
+                    Clear filter
+                  </Button>
+                )}
+              </Space>
             </div>
-            <RangePicker
-              value={range}
-              onChange={applyRange}
-              allowClear={false}
-              size="small"
-              style={{ width: '100%', maxWidth: '100%' }}
-              popupClassName="mobile-range-popup"
-            />
-          </div>
 
-          <div>
-            <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 6 }}>
-              Status
-            </div>
-            <Select
-              mode="multiple"
-              placeholder="Any status"
-              value={statusFilter}
-              onChange={setStatusFilter}
-              options={statusOptions}
-              allowClear
-              size="small"
-              style={{ width: '100%', maxWidth: '100%' }}
-              maxTagCount="responsive"
-              popupClassName="mobile-select-popup"
-            />
-          </div>
-        </Card>
-
-        {showSummary && (
-          <Card
-            bordered={false}
-            style={{ marginBottom: 14, borderRadius: 14, boxShadow: '0 4px 14px rgba(15,23,42,0.06)' }}
-          >
-            <Statistic
-              title={summaryTitle}
-              value={filtered.length}
-              prefix={<CalendarOutlined style={{ color: '#1677ff' }} />}
-            />
-          </Card>
-        )}
-
-        <div style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: 32 }}>
-              <Text type="secondary">Loading records...</Text>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div style={{ background: '#fff', borderRadius: 12, padding: 28, boxShadow: '0 2px 10px rgba(15,23,42,0.06)', textAlign: 'center' }}>
-              <Empty description="No records in this range" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            </div>
-          ) : (
-            filtered.map(renderMobileCard)
-          )}
+            {isMobile ? (
+              loading ? (
+                <div style={{ textAlign: 'center', padding: 28 }}>
+                  <Text type="secondary">Loading records…</Text>
+                </div>
+              ) : filtered.length === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="No records in this range. Try a wider period."
+                />
+              ) : (
+                filtered.map(renderMobileCard)
+              )
+            ) : (
+              <Table
+                rowKey="id"
+                columns={columns}
+                dataSource={filtered}
+                loading={loading}
+                pagination={{ pageSize: 12, showSizeChanger: true }}
+                scroll={{ x: 'max-content' }}
+                locale={{ emptyText: 'No records in this range. Try a wider period.' }}
+              />
+            )}
+          </section>
         </div>
 
         {renderDetailModal()}
       </div>
-    );
-  }
-
-  // ═══════════════ DESKTOP LAYOUT ═══════════════
-  return (
-    <div className="max-w-6xl mx-auto p-4 md:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <div>
-          <Title level={3} style={{ margin: 0, color: '#065f46' }}>
-            My Attendance History
-          </Title>
-          <Text type="secondary">
-            Filter by date range or status to review your records
-          </Text>
-        </div>
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={() => load(range[0], range[1])}
-          loading={loading}
-        >
-          Refresh
-        </Button>
-      </div>
-
-      <Card bordered={false} className="shadow-sm mb-4">
-        <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} md={12}>
-            <Space wrap size={6}>
-              <Text strong>Quick:</Text>
-              <Button size="small" type={quickRange === 'today' ? 'primary' : 'default'} onClick={() => applyQuick('today')}>Today</Button>
-              <Button size="small" type={quickRange === 'week' ? 'primary' : 'default'} onClick={() => applyQuick('week')}>This Week</Button>
-              <Button size="small" type={quickRange === 'month' ? 'primary' : 'default'} onClick={() => applyQuick('month')}>This Month</Button>
-              <Button size="small" type={quickRange === 'last30' ? 'primary' : 'default'} onClick={() => applyQuick('last30')}>Last 30 days</Button>
-            </Space>
-          </Col>
-          <Col xs={24} md={12}>
-            <Space wrap>
-              <Text strong>Range:</Text>
-              <RangePicker value={range} onChange={applyRange} allowClear={false} />
-            </Space>
-          </Col>
-        </Row>
-      </Card>
-
-      <Card bordered={false} className="shadow-sm mb-4">
-        <Space wrap>
-          <CalendarOutlined />
-          <Text strong>Status:</Text>
-          <Select
-            mode="multiple"
-            placeholder="Any status"
-            value={statusFilter}
-            onChange={setStatusFilter}
-            options={statusOptions}
-            allowClear
-            style={{ minWidth: 260 }}
-            maxTagCount="responsive"
-          />
-          {statusFilter.length > 0 && (
-            <Button type="link" size="small" onClick={() => setStatusFilter([])}>
-              Clear
-            </Button>
-          )}
-        </Space>
-      </Card>
-
-      {showSummary && (
-        <Row gutter={[16, 16]} className="mb-4">
-          <Col xs={24} sm={12} md={8} lg={6}>
-            <Card bordered={false} className="shadow-sm">
-              <Statistic
-                title={summaryTitle}
-                value={filtered.length}
-                prefix={<CalendarOutlined style={{ color: '#1677ff' }} />}
-              />
-            </Card>
-          </Col>
-        </Row>
-      )}
-
-      <Card
-        bordered={false}
-        className="shadow-sm"
-        title={
-          <Space>
-            <span>Records</span>
-            <Badge count={filtered.length} showZero color="#065f46" />
-          </Space>
-        }
-      >
-        <Table
-          rowKey="id"
-          columns={columns}
-          dataSource={filtered}
-          loading={loading}
-          pagination={{ pageSize: 12, showSizeChanger: true }}
-          scroll={{ x: 'max-content' }}
-          locale={{ emptyText: 'No records in this range' }}
-        />
-      </Card>
-
-      {renderDetailModal()}
-    </div>
+    </ConfigProvider>
   );
 }
