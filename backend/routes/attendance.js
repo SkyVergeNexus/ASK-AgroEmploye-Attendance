@@ -1323,7 +1323,7 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
            admin_resolved_by = ?,
            admin_resolved_at = NOW(),
            admin_resolved_reason = ?,
-           presence_state = NULL,
+           presence_state = 'unknown',
            after_close_tracking = 0
        WHERE id = ? AND needs_review = 1
          AND admin_resolved = 0 AND clock_out IS NULL`,

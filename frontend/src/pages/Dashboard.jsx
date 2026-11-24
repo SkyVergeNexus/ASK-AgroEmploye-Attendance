@@ -1,13 +1,13 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
-  Card, Row, Col, Button, Typography, Space, Tag, Statistic, message,
-  Table, Badge, Grid, Avatar, Alert, Modal, Input, Popconfirm,
+  Button, Typography, Space, Tag, message, Table, Badge, Grid, Avatar,
+  Alert, Modal, Input, Popconfirm, ConfigProvider,
 } from 'antd';
 import {
   LoginOutlined, LogoutOutlined, CheckCircleOutlined, ClockCircleOutlined,
   CloseCircleOutlined, CalendarOutlined, UserOutlined, ReloadOutlined, DeleteOutlined,
   EnvironmentOutlined, WifiOutlined, CameraOutlined, HomeOutlined,
-  SafetyCertificateOutlined,
+  SafetyCertificateOutlined, ApartmentOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
@@ -15,7 +15,7 @@ import { assetUrl } from '../config';
 import AttendanceRecordTag from '../components/AttendanceRecordTag';
 import { attendanceClockOutLabel } from '../utils/attendanceRecordLabel';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { useBreakpoint } = Grid;
 const { TextArea } = Input;
 
@@ -27,8 +27,148 @@ const statusColor = {
   leave: 'purple',
 };
 
+const statusHex = {
+  present: '#3f6b3a',
+  late: '#b7791f',
+  absent: '#b42318',
+  'half-day': '#2563a8',
+  leave: '#6d4aa8',
+};
+
 const RECENT_LIMIT = 5;
 
+// ═══════════ Brand styles (cocoa) ═══════════
+const CSS = `
+.cc-root {
+  --cc-bean: #2a1810;
+  --cc-roast: #4a2c1a;
+  --cc-husk: #7a5236;
+  --cc-gold: #d9a441;
+  --cc-leaf: #3f6b3a;
+  --cc-leaf-dark: #2f5230;
+  --cc-paper: #f3efea;
+  --cc-surface: #ffffff;
+  --cc-line: #e6ded4;
+  --cc-ink: #26170f;
+  --cc-muted: #85705f;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--cc-ink);
+  background: var(--cc-paper);
+  min-height: 100%;
+  padding: 16px;
+}
+.cc-wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+.cc-serif { font-family: 'Fraunces', Georgia, 'Times New Roman', serif; }
+
+/* Hero */
+.cc-hero {
+  position: relative; overflow: hidden; color: #fff;
+  border-radius: 28px 28px 28px 8px;
+  padding: 26px 26px 22px;
+  background:
+    radial-gradient(900px 300px at 85% -10%, rgba(217,164,65,0.28), transparent 60%),
+    radial-gradient(600px 260px at 0% 110%, rgba(63,107,58,0.35), transparent 60%),
+    linear-gradient(140deg, #2a1810 0%, #3b2214 55%, #4a2c1a 100%);
+  box-shadow: 0 18px 40px -22px rgba(42,24,16,0.7);
+}
+.cc-hero-pods { position: absolute; right: -20px; top: -14px; opacity: 0.09; pointer-events: none; }
+.cc-hero-top { position: relative; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; align-items: center; }
+.cc-who { display: flex; gap: 16px; align-items: center; min-width: 0; }
+.cc-hello { font-size: 13px; color: rgba(255,255,255,0.7); }
+.cc-name { font-size: 26px; line-height: 1.15; font-weight: 600; margin: 2px 0 8px; }
+.cc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.cc-chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  padding: 3px 10px; border-radius: 999px;
+  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.18);
+}
+.cc-clock { text-align: right; }
+.cc-time { font-size: 52px; line-height: 1; font-weight: 600; letter-spacing: -1px; }
+.cc-time small { font-size: 20px; opacity: 0.6; font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+.cc-date { font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 6px; }
+
+.cc-shift { position: relative; margin-top: 22px; }
+.cc-shift-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: rgba(255,255,255,0.72); margin-bottom: 8px; gap: 12px; flex-wrap: wrap; }
+.cc-shift-count { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 15px; color: var(--cc-gold); letter-spacing: 0.5px; }
+.cc-track { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.14); overflow: hidden; }
+.cc-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--cc-gold), #f0c36d); transition: width 800ms ease; }
+.cc-shift-foot { display: flex; justify-content: space-between; font-size: 11px; color: rgba(255,255,255,0.55); margin-top: 6px; }
+
+/* Layout */
+.cc-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.cc-panel { background: var(--cc-surface); border: 1px solid var(--cc-line); border-radius: 20px; padding: 20px; }
+.cc-panel-side { border-radius: 8px 20px 20px 20px; background: #fbf9f6; }
+.cc-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.cc-h { font-size: 18px; font-weight: 600; margin: 0; color: var(--cc-roast); }
+
+/* Tiles */
+.cc-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.cc-tile { border-radius: 16px; padding: 14px; background: #faf7f3; border: 1px solid var(--cc-line); }
+.cc-tile-ic { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; margin-bottom: 10px; }
+.cc-tile-label { font-size: 12px; color: var(--cc-muted); }
+.cc-tile-value { font-size: 20px; font-weight: 700; margin-top: 2px; line-height: 1.2; text-transform: capitalize; }
+.cc-tile-sub { margin-top: 4px; }
+
+/* Actions */
+.cc-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cc-btn { height: 54px !important; border-radius: 14px !important; font-weight: 600 !important; font-size: 16px !important; }
+.cc-btn-in:not(:disabled) { background: var(--cc-leaf) !important; border-color: var(--cc-leaf) !important; color: #fff !important; box-shadow: 0 8px 18px -10px var(--cc-leaf); }
+.cc-btn-in:not(:disabled):hover { background: var(--cc-leaf-dark) !important; }
+.cc-btn-out:not(:disabled) { background: var(--cc-roast) !important; border-color: var(--cc-roast) !important; color: #fff !important; }
+.cc-btn-out:not(:disabled):hover { background: var(--cc-bean) !important; }
+.cc-note { margin-top: 12px; }
+
+.cc-alerts { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+
+/* Check rows */
+.cc-check { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--cc-line); }
+.cc-check:last-of-type { border-bottom: none; }
+.cc-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+.cc-check-title { font-weight: 600; font-size: 14px; }
+.cc-check-text { font-size: 13px; color: var(--cc-muted); line-height: 1.4; }
+
+/* Mode cards */
+.cc-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+.cc-mode { border: 1px solid var(--cc-line); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.cc-mode-remote { background: #f5f9f3; border-color: #cfe0c9; }
+.cc-mode-ic { font-size: 24px; color: var(--cc-leaf); }
+
+/* History */
+.cc-rec { border: 1px solid var(--cc-line); border-radius: 16px; padding: 12px 14px; margin-bottom: 10px; background: #fff; display: flex; flex-direction: column; gap: 10px; }
+.cc-rec-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.cc-rec-times { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #faf7f3; border-radius: 10px; padding: 8px 10px; }
+.cc-rec-label { font-size: 11px; color: var(--cc-muted); }
+
+@media (max-width: 860px) {
+  .cc-grid { grid-template-columns: 1fr; }
+  .cc-clock { text-align: left; }
+}
+@media (max-width: 560px) {
+  .cc-root { padding: 10px; }
+  .cc-hero { padding: 20px 18px 18px; border-radius: 22px 22px 22px 6px; }
+  .cc-name { font-size: 22px; }
+  .cc-time { font-size: 42px; }
+  .cc-tiles { grid-template-columns: 1fr; }
+  .cc-tile { display: flex; align-items: center; gap: 12px; }
+  .cc-tile-ic { margin-bottom: 0; }
+  .cc-modes { grid-template-columns: 1fr; }
+  .cc-panel { padding: 16px; border-radius: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .cc-fill { transition: none; } }
+`;
+
+const antTheme = {
+  token: {
+    colorPrimary: '#4a2c1a',
+    colorSuccess: '#3f6b3a',
+    colorWarning: '#b7791f',
+    colorError: '#b42318',
+    borderRadius: 10,
+    fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
+  },
+};
+
+// ═══════════ Helpers ═══════════
 function localDateString(d = new Date()) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -62,6 +202,73 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function greetingFor(d) {
+  const h = d.getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+// ═══════════ Small presentational pieces ═══════════
+function PodMark({ size = 28, color = '#d9a441' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path
+        d="M16 3c6 3 9 8.5 9 13s-3 10.5-9 13c-6-2.5-9-8.5-9-13S10 6 16 3z"
+        fill={color}
+      />
+      <path
+        d="M16 3v26M11 9c1.5 4 1.5 10 0 14M21 9c-1.5 4-1.5 10 0 14"
+        stroke="#2a1810"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        opacity="0.45"
+      />
+    </svg>
+  );
+}
+
+function HeroPods() {
+  return (
+    <div className="cc-hero-pods" aria-hidden="true">
+      <svg width="320" height="240" viewBox="0 0 320 240" fill="none">
+        <g fill="#fff">
+          <path d="M70 20c40 20 60 58 60 88s-20 70-60 88c-40-18-60-58-60-88S30 40 70 20z" />
+          <path d="M200 60c30 15 45 44 45 66s-15 52-45 66c-30-14-45-44-45-66s15-51 45-66z" />
+          <path d="M280 10c18 9 27 26 27 40s-9 31-27 40c-18-9-27-26-27-40s9-31 27-40z" />
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+function Tile({ icon, tint, label, value, valueColor, sub }) {
+  return (
+    <div className="cc-tile">
+      <div className="cc-tile-ic" style={{ background: tint.bg, color: tint.fg }}>{icon}</div>
+      <div>
+        <div className="cc-tile-label">{label}</div>
+        <div className="cc-tile-value" style={{ color: valueColor }}>{value}</div>
+        {sub && <div className="cc-tile-sub">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+const DOT = { ok: '#3f6b3a', bad: '#b42318', warn: '#d9a441', idle: '#c9bdb0' };
+
+function CheckRow({ tone, title, text }) {
+  return (
+    <div className="cc-check">
+      <span className="cc-dot" style={{ background: DOT[tone] }} />
+      <div>
+        <div className="cc-check-title">{title}</div>
+        <div className="cc-check-text">{text}</div>
+      </div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -494,8 +701,6 @@ export default function Dashboard() {
     setTaskInput('');
   };
   const removeTask = (index) => setRemoteTasks((prev) => prev.filter((_, i) => i !== index));
-  const editTask = (index, value) =>
-    setRemoteTasks((prev) => prev.map((t, i) => (i === index ? value : t)));
   const handleTaskInputKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -662,12 +867,17 @@ export default function Dashboard() {
     };
   }, [settings, today, now, pendingEarly, scheduleStart, scheduleEnd]);
 
+  const shiftProgress =
+    scheduleStart && scheduleEnd
+      ? Math.min(100, Math.max(0, ((now - scheduleStart) / (scheduleEnd - scheduleStart)) * 100))
+      : 0;
+
   const columns = [
     {
       title: 'Date',
       dataIndex: 'attendance_date',
       key: 'attendance_date',
-      render: (v) => String(v).slice(0, 10),
+      render: (v) => <Text strong>{String(v).slice(0, 10)}</Text>,
       sorter: (a, b) => String(a.attendance_date).localeCompare(String(b.attendance_date)),
       defaultSortOrder: 'descend',
     },
@@ -694,7 +904,7 @@ export default function Dashboard() {
       dataIndex: 'status',
       key: 'status',
       render: (v) => (
-        <Tag color={statusColor[v] || 'default'}>
+        <Tag color={statusColor[v] || 'default'} style={{ borderRadius: 999 }}>
           {v ? v[0].toUpperCase() + v.slice(1) : '—'}
         </Tag>
       ),
@@ -724,521 +934,481 @@ export default function Dashboard() {
     return bits.length ? bits.join(' · ') : null;
   })();
 
-  return (
-    <div className="max-w-5xl mx-auto p-4 md:p-6">
-      {/* ═══════════ Greeting header ═══════════ */}
-      {isMobile ? (
-        <Card
-          style={{
-            border: 'none', borderRadius: 16, marginBottom: 16,
-            background: 'linear-gradient(135deg, #064e3b 0%, #065f46 55%, #047857 100%)',
-            boxShadow: '0 10px 24px -10px rgba(6,95,70,0.5)',
-          }}
-          styles={{ body: { padding: '18px 16px' } }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
-            <Avatar
-              size={56}
-              src={picUrl || undefined}
-              icon={!picUrl ? <UserOutlined /> : undefined}
-              style={{
-                backgroundColor: picUrl ? undefined : 'rgba(255,255,255,0.2)',
-                border: '2px solid rgba(255,255,255,0.4)',
-                flexShrink: 0,
-              }}
-            />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Welcome back</div>
-              <div
-                style={{
-                  color: '#fff', fontSize: 18, fontWeight: 700,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2,
-                }}
-              >
-                {user?.name || 'there'}
-              </div>
-              <div style={{ marginTop: 4 }}>
-                {user?.department_name && (
-                  <Tag
-                    style={{
-                      background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.25)',
-                      color: '#fff', borderRadius: 10, fontSize: 11, margin: 0,
-                    }}
-                  >
-                    {user.department_name}
-                  </Tag>
-                )}
-              </div>
-            </div>
-          </div>
+  // ── Office check rows (side panel) ──
+  const locationRow = !enforceLocation
+    ? { tone: 'idle', text: 'Not required for your office.' }
+    : geo.status === 'inside'
+      ? { tone: 'ok', text: `You are inside the office area (${geo.distance}m from the centre).` }
+      : geo.status === 'outside'
+        ? { tone: 'bad', text: `You are ${geo.distance}m away. Move within ${geo.radius}m.` }
+        : geo.status === 'denied'
+          ? { tone: 'bad', text: 'Location permission is blocked. Allow it in your browser settings.' }
+          : geo.status === 'unsupported'
+            ? { tone: 'bad', text: 'This device does not support GPS.' }
+            : geo.status === 'no-office'
+              ? { tone: 'warn', text: 'Office location is not set yet. Ask your administrator.' }
+              : { tone: 'warn', text: 'Checking your location…' };
 
-          <div
-            style={{
-              display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
-              background: 'rgba(0,0,0,0.15)', borderRadius: 12, padding: '12px 14px',
-            }}
-          >
-            <div>
-              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                Now
-              </div>
-              <div style={{ color: '#fff', fontSize: 20, fontWeight: 700, lineHeight: 1.2 }}>
-                {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </div>
-              <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: 10, marginTop: 2 }}>
-                {now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}
-              </div>
-            </div>
-            <div style={{ borderLeft: '1px solid rgba(255,255,255,0.15)', paddingLeft: 12 }}>
-              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                {countdown.active ? 'Time left' : 'Countdown'}
-              </div>
-              <div
-                style={{
-                  fontSize: 20, fontWeight: 700, fontFamily: 'ui-monospace, monospace',
-                  color: countdown.active ? '#fbbf24' : 'rgba(255,255,255,0.5)',
-                  letterSpacing: 1, lineHeight: 1.2,
-                }}
-              >
-                {countdown.text}
-              </div>
-              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 10, marginTop: 2 }}>
-                {countdown.hint}
-              </div>
-            </div>
-          </div>
-        </Card>
-      ) : (
-        <Card variant="borderless" className="shadow-sm mb-6">
-          <Row gutter={[16, 16]} align="middle">
-            <Col xs={24} md={14}>
-              <Space size={16} align="center" wrap>
+  const networkRow = !networkIsEnforced
+    ? { tone: 'idle', text: 'Not required for your office.' }
+    : ipAllowed
+      ? { tone: 'ok', text: 'You are connected to the office Wi-Fi.' }
+      : { tone: 'bad', text: `Connect to the office Wi-Fi (current IP ${ipCheck?.clientIp || 'unknown'}).` };
+
+  const windowRow = !settings
+    ? { tone: 'idle', text: 'Loading work hours…' }
+    : today
+      ? { tone: 'ok', text: 'You have already clocked in today.' }
+      : withinWindow
+        ? { tone: 'ok', text: `Open until ${String(settings.work_end).slice(0, 5)}.` }
+        : { tone: 'warn', text: clockInUnavailableReason || 'Outside work hours.' };
+
+  const statusKey = today?.status;
+  const statusIcon =
+    statusKey === 'present' ? <CheckCircleOutlined />
+    : statusKey === 'late' ? <ClockCircleOutlined />
+    : statusKey === 'absent' ? <CloseCircleOutlined />
+    : statusKey === 'leave' ? <CalendarOutlined />
+    : <ClockCircleOutlined />;
+  const statusTone = statusHex[statusKey] || '#85705f';
+
+  const mark = (label) => (
+    <span className="cc-serif" style={{ fontSize: 15, fontWeight: 600 }}>{label}</span>
+  );
+
+  return (
+    <ConfigProvider theme={antTheme}>
+      <div className="cc-root">
+        <style>{CSS}</style>
+
+        <div className="cc-wrap">
+          {/* ═══════════ Hero ═══════════ */}
+          <section className="cc-hero">
+            <HeroPods />
+            <div className="cc-hero-top">
+              <div className="cc-who">
                 <Avatar
-                  size={64}
+                  size={isMobile ? 56 : 68}
                   src={picUrl || undefined}
                   icon={!picUrl ? <UserOutlined /> : undefined}
-                  style={{ backgroundColor: picUrl ? undefined : '#065f46' }}
-                />
-                <div>
-                  <Title level={3} style={{ margin: 0, color: '#065f46' }}>
-                    Hi, {user?.name || 'there'}
-                  </Title>
-                  <Text type="secondary">
-                    {user?.department_name || 'ASK Agrobusiness Limited'}
-                    {user?.role_name && ` · ${user.role_name}`}
-                  </Text>
-                </div>
-              </Space>
-            </Col>
-            <Col xs={24} md={10} style={{ textAlign: 'right' }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {now.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-              </Text>
-              <div style={{ fontSize: 26, fontWeight: 600, color: '#065f46' }}>{now.toLocaleTimeString()}</div>
-              <div className="mt-2">
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {countdown.active ? 'Time left today' : 'Countdown'}
-                </Text>
-                <div
                   style={{
-                    fontSize: 30, fontWeight: 700, fontFamily: 'monospace',
-                    color: countdown.active ? '#d97706' : '#94a3b8',
-                    letterSpacing: 1, lineHeight: 1.1,
+                    backgroundColor: picUrl ? undefined : 'rgba(255,255,255,0.18)',
+                    border: '2px solid rgba(217,164,65,0.7)',
+                    flexShrink: 0,
                   }}
-                >
-                  {countdown.text}
+                />
+                <div style={{ minWidth: 0 }}>
+                  <div className="cc-hello">{greetingFor(now)}</div>
+                  <div className="cc-name cc-serif">{user?.name || 'there'}</div>
+                  <div className="cc-chips">
+                    <span className="cc-chip">
+                      <PodMark size={14} />
+                      ASK Agrobusiness
+                    </span>
+                    {user?.department_name && (
+                      <span className="cc-chip"><ApartmentOutlined /> {user.department_name}</span>
+                    )}
+                    {user?.role_name && <span className="cc-chip">{user.role_name}</span>}
+                  </div>
                 </div>
-                <Text type="secondary" style={{ fontSize: 11 }}>{countdown.hint}</Text>
               </div>
-            </Col>
-          </Row>
-        </Card>
-      )}
 
-      {/* ═══════════ Today's status ═══════════ */}
-      <Card
-        title={
-          <Space>
-            <span>Today's Status</span>
-            {today && <Tag color={statusColor[today.status] || 'default'}>{today.status}</Tag>}
-          </Space>
-        }
-        variant="borderless"
-        className="shadow-sm mb-6"
-        extra={
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            onClick={() => { load(); checkIp(); refreshGeo(); }}
-            loading={loading || ipChecking}
-          >
-            {!isMobile && 'Refresh'}
-          </Button>
-        }
-      >
-        {clockInUnavailableReason && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 12 }}
-            title={clockInUnavailableReason}
-            description={`Your administrator's clock-in hours are ${String(settings.work_start).slice(0, 5)}–${String(settings.work_end).slice(0, 5)}.`}
-          />
-        )}
+              <div className="cc-clock">
+                <div className="cc-time cc-serif">
+                  {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  <small>{String(now.getSeconds()).padStart(2, '0')}</small>
+                </div>
+                <div className="cc-date">
+                  {now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                </div>
+              </div>
+            </div>
 
-        {!today && networkIsEnforced && ipCheck && (
-          ipCheck.allowed ? (
-            <Alert
-              type="success" showIcon icon={<SafetyCertificateOutlined />}
-              style={{ marginBottom: 12 }}
-              title="You're on the office network"
-              description={
-                <span style={{ fontSize: 13 }}>
-                  Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is in the allowlist.
-                </span>
-              }
-            />
-          ) : (
-            <Alert
-              type="error" showIcon icon={<WifiOutlined />}
-              style={{ marginBottom: 12 }}
-              title="You're not on the office Wi-Fi"
-              description={
-                <span style={{ fontSize: 13 }}>
-                  Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is not in the allowed list.
-                </span>
-              }
-            />
-          )
-        )}
-
-        {clockInError && !today && (
-          <Alert
-            type="error" showIcon closable onClose={() => setClockInError(null)}
-            style={{ marginBottom: 12 }}
-            title={clockInError.message}
-            description={
-              clockInError.requiresOfficeWifi ? (
-                <>
-                  <Text strong>Connect to the office Wi-Fi network</Text> and try again.
-                  {clockInError.sawIp && (
-                    <div style={{ marginTop: 4, fontSize: 12 }}>
-                      <Text type="secondary">Your current IP: </Text>
-                      <Text code>{clockInError.sawIp}</Text>
-                    </div>
-                  )}
-                </>
-              ) : clockInError.requiresLocation ? (
-                'Enable location/GPS in your browser settings, then try again.'
-              ) : clockInError.distance != null ? (
-                `You are ${clockInError.distance}m away. Move within ${clockInError.radius}m of the office.`
-              ) : (
-                'Try again or contact your administrator.'
-              )
-            }
-          />
-        )}
-
-        {today?.needs_review && (
-          <Alert
-            type="warning" showIcon
-            style={{ marginBottom: 12 }}
-            title="Missed clock-out — awaiting admin review"
-            description="You did not clock out within 24 hours of your clock-in. An administrator will review this day and mark you present or absent."
-          />
-        )}
-
-        {clockOutError && today && !today.clock_out && (
-          <Alert
-            type="error" showIcon closable onClose={() => setClockOutError(null)}
-            style={{ marginBottom: 12 }}
-            title={clockOutError.message}
-            description={
-              clockOutError.requiresOfficeWifi ? (
-                <>
-                  <Text strong>Connect to the office Wi-Fi</Text> to clock out.
-                  {clockOutError.sawIp && (
-                    <div style={{ marginTop: 4, fontSize: 12 }}>
-                      <Text type="secondary">Your current IP: </Text>
-                      <Text code>{clockOutError.sawIp}</Text>
-                    </div>
-                  )}
-                </>
-              ) : clockOutError.requiresLocation ? (
-                'Enable location/GPS in your browser settings to clock out.'
-              ) : clockOutError.distance != null ? (
-                `You are ${clockOutError.distance}m away. Move within ${clockOutError.radius}m of the office.`
-              ) : (
-                'Try again or contact your administrator.'
-              )
-            }
-            action={
-              <Button size="small" onClick={() => { refreshGeo(); checkIp(); }}>
-                Retry
-              </Button>
-            }
-          />
-        )}
-
-        {isOnsiteToday && clockOutBlockedDescription && !today.clock_out && (
-          <Alert
-            type="warning" showIcon
-            style={{ marginBottom: 12 }}
-            title="Clock-out requires the office GPS and Wi-Fi"
-            description={clockOutBlockedDescription}
-            action={
-              <Button
-                size="small" icon={<ReloadOutlined />}
-                onClick={() => { refreshGeo(); checkIp(); }}
-                loading={ipChecking}
+            <div className="cc-shift">
+              <div className="cc-shift-head">
+                <span>{countdown.active ? 'Time left in your shift' : countdown.hint}</span>
+                <span className="cc-shift-count">{countdown.text}</span>
+              </div>
+              <div
+                className="cc-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(shiftProgress)}
+                aria-label="Shift progress"
               >
-                Re-check
-              </Button>
-            }
-          />
-        )}
-
-        {today && !today.clock_out && today.clock_in_mode !== 'remote' && !today.needs_review && (
-          <Alert
-            type="info" showIcon
-            style={{ marginBottom: 12 }}
-            title="On-site presence monitoring"
-            description="Keep the employee app open. You must be within the office GPS and on the office Wi-Fi to clock out. The time you clock out is what gets recorded — not the scheduled closing time. If you never clock out within 24 hours, admin will review your day."
-          />
-        )}
-
-        {pendingEarly && (
-          <Alert
-            type="warning" showIcon
-            style={{ marginBottom: 12 }}
-            title="Early clock-out pending approval"
-            description={
-              <div>
-                <div>
-                  You requested to leave at <Text strong>{pendingEarly.requested_out_time}</Text>.
+                <div className="cc-fill" style={{ width: `${shiftProgress}%` }} />
+              </div>
+              {settings?.work_start && settings?.work_end && (
+                <div className="cc-shift-foot">
+                  <span>{String(settings.work_start).slice(0, 5)}</span>
+                  <span>{String(settings.work_end).slice(0, 5)}</span>
                 </div>
-                <Popconfirm
-                  title="Cancel this request?"
-                  okText="Yes, cancel"
-                  okButtonProps={{ danger: true }}
-                  cancelText="Keep it"
-                  onConfirm={cancelEarlyRequest}
+              )}
+            </div>
+          </section>
+
+          <div className="cc-grid">
+            {/* ═══════════ Today ═══════════ */}
+            <section className="cc-panel">
+              <div className="cc-panel-head">
+                <Space size={10} wrap>
+                  <h2 className="cc-h cc-serif">Today</h2>
+                  {today && (
+                    <Tag color={statusColor[today.status] || 'default'} style={{ borderRadius: 999, margin: 0 }}>
+                      {today.status}
+                    </Tag>
+                  )}
+                  {today && (
+                    <Tag style={{ borderRadius: 999, margin: 0 }}>
+                      {today.clock_in_mode === 'remote' ? 'Remote' : 'On-site'}
+                    </Tag>
+                  )}
+                </Space>
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  onClick={() => { load(); checkIp(); refreshGeo(); }}
+                  loading={loading || ipChecking}
                 >
-                  <Button danger size="small" icon={<DeleteOutlined />} loading={cancelling} style={{ marginTop: 8 }}>
-                    Cancel request
-                  </Button>
-                </Popconfirm>
+                  Refresh
+                </Button>
               </div>
-            }
-          />
-        )}
-        {approvedEarly && !today?.clock_out && (
-          <Alert
-            type="success" showIcon
-            style={{ marginBottom: 12 }}
-            title="Early clock-out approved"
-            description="You can now click Clock Out when you're inside the office GPS and Wi-Fi."
-          />
-        )}
-        {rejectedEarly && !today?.clock_out && (
-          <Alert
-            type="error" showIcon
-            style={{ marginBottom: 12 }}
-            title="Early clock-out rejected"
-            description={
-              rejectedEarly.admin_note
-                ? `Admin note: ${rejectedEarly.admin_note}`
-                : 'Your request was not approved. Please continue your shift.'
-            }
-          />
-        )}
 
-        {/* Status tiles (mobile/desktop) */}
-        {isMobile ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                background: '#f8fafc', border: '1px solid #e2e8f0',
-                borderRadius: 12, padding: '10px 14px', borderLeft: '4px solid #16a34a',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <LoginOutlined style={{ color: '#16a34a', fontSize: 18 }} />
-                <div>
-                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Clock In</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: today?.clock_in ? '#065f46' : '#94a3b8' }}>
-                    {today?.clock_in || '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                background: '#f8fafc', border: '1px solid #e2e8f0',
-                borderRadius: 12, padding: '10px 14px', borderLeft: '4px solid #d97706',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <LogoutOutlined style={{ color: '#d97706', fontSize: 18 }} />
-                <div>
-                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Clock Out</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: today?.clock_out ? '#065f46' : '#94a3b8' }}>
-                    {today ? attendanceClockOutLabel(today) : 'Not recorded'}
-                  </div>
-                  <AttendanceRecordTag record={today || {}} />
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                background: '#f8fafc', border: '1px solid #e2e8f0',
-                borderRadius: 12, padding: '10px 14px',
-                borderLeft: `4px solid ${
-                  today?.status === 'present' ? '#16a34a' :
-                  today?.status === 'late' ? '#d97706' :
-                  today?.status === 'absent' ? '#dc2626' :
-                  today?.status === 'leave' ? '#7c3aed' : '#94a3b8'
-                }`,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {today?.status === 'present' ? (
-                  <CheckCircleOutlined style={{ color: '#16a34a', fontSize: 18 }} />
-                ) : today?.status === 'late' ? (
-                  <ClockCircleOutlined style={{ color: '#d97706', fontSize: 18 }} />
-                ) : today?.status === 'absent' ? (
-                  <CloseCircleOutlined style={{ color: '#dc2626', fontSize: 18 }} />
-                ) : today?.status === 'leave' ? (
-                  <CalendarOutlined style={{ color: '#7c3aed', fontSize: 18 }} />
-                ) : (
-                  <ClockCircleOutlined style={{ color: '#94a3b8', fontSize: 18 }} />
+              {/* Alerts */}
+              <div className="cc-alerts">
+                {clockInUnavailableReason && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    title={clockInUnavailableReason}
+                    description={`Your administrator's clock-in hours are ${String(settings.work_start).slice(0, 5)}–${String(settings.work_end).slice(0, 5)}.`}
+                  />
                 )}
-                <div>
-                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Status</div>
-                  <div
-                    style={{
-                      fontSize: 16, fontWeight: 700, textTransform: 'capitalize',
-                      color:
-                        today?.status === 'present' ? '#16a34a' :
-                        today?.status === 'late' ? '#d97706' :
-                        today?.status === 'absent' ? '#dc2626' :
-                        today?.status === 'leave' ? '#7c3aed' : '#64748b',
-                    }}
-                  >
-                    {today?.status === 'leave' ? 'On approved leave' : today?.status || 'Not marked'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <Row gutter={[16, 16]} className="mb-4">
-            <Col xs={24} sm={8}>
-              <Statistic
-                title="Clock In"
-                value={today?.clock_in || '—'}
-                prefix={<LoginOutlined style={{ color: '#16a34a' }} />}
-                styles={{ content: { color: today?.clock_in ? '#065f46' : '#94a3b8' } }}
-              />
-            </Col>
-            <Col xs={24} sm={8}>
-              <Statistic
-                title="Clock Out"
-                value={today ? attendanceClockOutLabel(today) : 'Not recorded'}
-                prefix={<LogoutOutlined style={{ color: '#d97706' }} />}
-                styles={{ content: { color: today?.clock_out ? '#065f46' : '#94a3b8' } }}
-              />
-              {today && <AttendanceRecordTag record={today} />}
-            </Col>
-            <Col xs={24} sm={8}>
-              <Statistic
-                title="Status"
-                value={today?.status === 'leave' ? 'On approved leave' : today?.status || 'Not marked'}
-                prefix={
-                  today?.status === 'present' ? (
-                    <CheckCircleOutlined style={{ color: '#16a34a' }} />
-                  ) : today?.status === 'late' ? (
-                    <ClockCircleOutlined style={{ color: '#d97706' }} />
-                  ) : today?.status === 'absent' ? (
-                    <CloseCircleOutlined style={{ color: '#dc2626' }} />
-                  ) : today?.status === 'leave' ? (
-                    <CalendarOutlined style={{ color: '#7c3aed' }} />
+
+                {!today && networkIsEnforced && ipCheck && (
+                  ipCheck.allowed ? (
+                    <Alert
+                      type="success" showIcon icon={<SafetyCertificateOutlined />}
+                      title="You're on the office network"
+                      description={
+                        <span style={{ fontSize: 13 }}>
+                          Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is in the allowlist.
+                        </span>
+                      }
+                    />
                   ) : (
-                    <ClockCircleOutlined style={{ color: '#94a3b8' }} />
+                    <Alert
+                      type="error" showIcon icon={<WifiOutlined />}
+                      title="You're not on the office Wi-Fi"
+                      description={
+                        <span style={{ fontSize: 13 }}>
+                          Your IP <Text code>{ipCheck.clientIp || 'unknown'}</Text> is not in the allowed list.
+                        </span>
+                      }
+                    />
                   )
-                }
-                styles={{
-                  content: {
-                    color:
-                      today?.status === 'present' ? '#16a34a' :
-                      today?.status === 'late' ? '#d97706' :
-                      today?.status === 'absent' ? '#dc2626' :
-                      today?.status === 'leave' ? '#7c3aed' : '#64748b',
-                  },
-                }}
+                )}
+
+                {clockInError && !today && (
+                  <Alert
+                    type="error" showIcon closable onClose={() => setClockInError(null)}
+                    title={clockInError.message}
+                    description={
+                      clockInError.requiresOfficeWifi ? (
+                        <>
+                          <Text strong>Connect to the office Wi-Fi network</Text> and try again.
+                          {clockInError.sawIp && (
+                            <div style={{ marginTop: 4, fontSize: 12 }}>
+                              <Text type="secondary">Your current IP: </Text>
+                              <Text code>{clockInError.sawIp}</Text>
+                            </div>
+                          )}
+                        </>
+                      ) : clockInError.requiresLocation ? (
+                        'Enable location/GPS in your browser settings, then try again.'
+                      ) : clockInError.distance != null ? (
+                        `You are ${clockInError.distance}m away. Move within ${clockInError.radius}m of the office.`
+                      ) : (
+                        'Try again or contact your administrator.'
+                      )
+                    }
+                  />
+                )}
+
+                {today?.needs_review && (
+                  <Alert
+                    type="warning" showIcon
+                    title="Missed clock-out — awaiting admin review"
+                    description="You did not clock out within 24 hours of your clock-in. An administrator will review this day and mark you present or absent."
+                  />
+                )}
+
+                {clockOutError && today && !today.clock_out && (
+                  <Alert
+                    type="error" showIcon closable onClose={() => setClockOutError(null)}
+                    title={clockOutError.message}
+                    description={
+                      clockOutError.requiresOfficeWifi ? (
+                        <>
+                          <Text strong>Connect to the office Wi-Fi</Text> to clock out.
+                          {clockOutError.sawIp && (
+                            <div style={{ marginTop: 4, fontSize: 12 }}>
+                              <Text type="secondary">Your current IP: </Text>
+                              <Text code>{clockOutError.sawIp}</Text>
+                            </div>
+                          )}
+                        </>
+                      ) : clockOutError.requiresLocation ? (
+                        'Enable location/GPS in your browser settings to clock out.'
+                      ) : clockOutError.distance != null ? (
+                        `You are ${clockOutError.distance}m away. Move within ${clockOutError.radius}m of the office.`
+                      ) : (
+                        'Try again or contact your administrator.'
+                      )
+                    }
+                    action={
+                      <Button size="small" onClick={() => { refreshGeo(); checkIp(); }}>
+                        Retry
+                      </Button>
+                    }
+                  />
+                )}
+
+                {isOnsiteToday && clockOutBlockedDescription && !today.clock_out && (
+                  <Alert
+                    type="warning" showIcon
+                    title="Clock-out requires the office GPS and Wi-Fi"
+                    description={clockOutBlockedDescription}
+                    action={
+                      <Button
+                        size="small" icon={<ReloadOutlined />}
+                        onClick={() => { refreshGeo(); checkIp(); }}
+                        loading={ipChecking}
+                      >
+                        Re-check
+                      </Button>
+                    }
+                  />
+                )}
+
+                {today && !today.clock_out && today.clock_in_mode !== 'remote' && !today.needs_review && (
+                  <Alert
+                    type="info" showIcon
+                    title="On-site presence monitoring"
+                    description="Keep the employee app open. You must be within the office GPS and on the office Wi-Fi to clock out. The time you clock out is what gets recorded — not the scheduled closing time. If you never clock out within 24 hours, admin will review your day."
+                  />
+                )}
+
+                {pendingEarly && (
+                  <Alert
+                    type="warning" showIcon
+                    title="Early clock-out pending approval"
+                    description={
+                      <div>
+                        <div>
+                          You requested to leave at <Text strong>{pendingEarly.requested_out_time}</Text>.
+                        </div>
+                        <Popconfirm
+                          title="Cancel this request?"
+                          okText="Yes, cancel"
+                          okButtonProps={{ danger: true }}
+                          cancelText="Keep it"
+                          onConfirm={cancelEarlyRequest}
+                        >
+                          <Button danger size="small" icon={<DeleteOutlined />} loading={cancelling} style={{ marginTop: 8 }}>
+                            Cancel request
+                          </Button>
+                        </Popconfirm>
+                      </div>
+                    }
+                  />
+                )}
+                {approvedEarly && !today?.clock_out && (
+                  <Alert
+                    type="success" showIcon
+                    title="Early clock-out approved"
+                    description="You can now click Clock Out when you're inside the office GPS and Wi-Fi."
+                  />
+                )}
+                {rejectedEarly && !today?.clock_out && (
+                  <Alert
+                    type="error" showIcon
+                    title="Early clock-out rejected"
+                    description={
+                      rejectedEarly.admin_note
+                        ? `Admin note: ${rejectedEarly.admin_note}`
+                        : 'Your request was not approved. Please continue your shift.'
+                    }
+                  />
+                )}
+              </div>
+
+              {/* Tiles */}
+              <div className="cc-tiles">
+                <Tile
+                  icon={<LoginOutlined />}
+                  tint={{ bg: '#e6f0e3', fg: '#3f6b3a' }}
+                  label="Clock in"
+                  value={today?.clock_in || '—'}
+                  valueColor={today?.clock_in ? '#2f5230' : '#b3a595'}
+                />
+                <Tile
+                  icon={<LogoutOutlined />}
+                  tint={{ bg: '#f3e6d6', fg: '#7a5236' }}
+                  label="Clock out"
+                  value={today ? attendanceClockOutLabel(today) : 'Not recorded'}
+                  valueColor={today?.clock_out ? '#4a2c1a' : '#b3a595'}
+                  sub={today ? <AttendanceRecordTag record={today} /> : null}
+                />
+                <Tile
+                  icon={statusIcon}
+                  tint={{ bg: `${statusTone}1f`, fg: statusTone }}
+                  label="Status"
+                  value={statusKey === 'leave' ? 'On leave' : statusKey || 'Not marked'}
+                  valueColor={statusTone}
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="cc-actions">
+                <Button
+                  className="cc-btn cc-btn-in"
+                  icon={<LoginOutlined />}
+                  onClick={() => setClockModeOpen(true)}
+                  disabled={!canClockIn}
+                  loading={clocking && canClockIn}
+                >
+                  Clock in
+                </Button>
+                <Button
+                  className="cc-btn cc-btn-out"
+                  icon={<LogoutOutlined />}
+                  onClick={() => clockOut()}
+                  disabled={!canClockOut}
+                  loading={clocking && canClockOut}
+                >
+                  Clock out
+                </Button>
+              </div>
+
+              <div className="cc-note">
+                {pendingEarly && (
+                  <Badge status="warning" text={<Text type="secondary">Awaiting admin approval</Text>} />
+                )}
+                {approvedEarly && !today?.clock_out && (
+                  <Badge status="success" text={<Text type="secondary">Approved — you can clock out</Text>} />
+                )}
+                {today?.clock_out && (
+                  <Badge status="success" text={<Text type="secondary">Day complete — see you tomorrow</Text>} />
+                )}
+              </div>
+            </section>
+
+            {/* ═══════════ Office checks ═══════════ */}
+            <aside className="cc-panel cc-panel-side">
+              <div className="cc-panel-head">
+                <h2 className="cc-h cc-serif">Before you clock in</h2>
+              </div>
+              <CheckRow tone={windowRow.tone} title="Work hours" text={windowRow.text} />
+              <CheckRow tone={locationRow.tone} title="Location" text={locationRow.text} />
+              <CheckRow tone={networkRow.tone} title="Office Wi-Fi" text={networkRow.text} />
+              <Button
+                block
+                icon={<EnvironmentOutlined />}
+                onClick={() => { refreshGeo(); checkIp(); }}
+                loading={ipChecking || geo.status === 'checking'}
+                style={{ marginTop: 10 }}
+              >
+                Check again
+              </Button>
+            </aside>
+          </div>
+
+          {/* ═══════════ Recent attendance ═══════════ */}
+          <section className="cc-panel">
+            <div className="cc-panel-head">
+              <h2 className="cc-h cc-serif">Recent attendance</h2>
+              <Text type="secondary" style={{ fontSize: 13 }}>Your last {RECENT_LIMIT} records</Text>
+            </div>
+
+            {isMobile ? (
+              recentHistory.length === 0 ? (
+                <Text type="secondary">No records yet. Your first clock-in will show up here.</Text>
+              ) : (
+                recentHistory.map((r) => (
+                  <div key={r.id} className="cc-rec">
+                    <div className="cc-rec-row">
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{String(r.attendance_date).slice(0, 10)}</div>
+                        <div style={{ fontSize: 12, color: '#85705f' }}>
+                          {r.early_leave_reason ? 'Left early' : 'Full day'}
+                        </div>
+                      </div>
+                      <Tag
+                        color={statusColor[r.status] || 'default'}
+                        style={{ margin: 0, borderRadius: 999, textTransform: 'capitalize' }}
+                      >
+                        {r.status}
+                      </Tag>
+                    </div>
+                    <div className="cc-rec-times">
+                      <div>
+                        <div className="cc-rec-label">Clock in</div>
+                        <div style={{ fontWeight: 600, color: '#2f5230' }}>{r.clock_in || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="cc-rec-label">Clock out</div>
+                        <div style={{ fontWeight: 600, color: r.clock_out ? '#4a2c1a' : '#b3a595' }}>
+                          {r.clock_out || '—'}
+                        </div>
+                        <AttendanceRecordTag record={r} />
+                      </div>
+                    </div>
+                    {r.early_leave_reason && (
+                      <div
+                        style={{
+                          fontSize: 12, color: '#7a4a12', background: '#fdf3e1',
+                          border: '1px solid #f1dcae', borderRadius: 10, padding: '6px 10px',
+                        }}
+                      >
+                        <strong>Reason:</strong> {r.early_leave_reason}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )
+            ) : (
+              <Table
+                dataSource={recentHistory}
+                columns={columns}
+                rowKey="id"
+                pagination={false}
+                size="middle"
+                locale={{ emptyText: 'No records yet. Your first clock-in will show up here.' }}
               />
-            </Col>
-          </Row>
-        )}
+            )}
+          </section>
+        </div>
 
-        <Space wrap>
-          <Button
-            type="primary"
-            size="large"
-            icon={<LoginOutlined />}
-            onClick={() => setClockModeOpen(true)}
-            disabled={!canClockIn}
-            loading={clocking && canClockIn}
-            style={{ backgroundColor: canClockIn ? '#15803d' : undefined }}
-          >
-            Clock In
-          </Button>
-          <Button
-            size="large"
-            icon={<LogoutOutlined />}
-            onClick={() => clockOut()}
-            disabled={!canClockOut}
-            loading={clocking && canClockOut}
-            danger
-          >
-            Clock Out
-          </Button>
-          {pendingEarly && (
-            <Badge status="warning" text={<Text type="secondary">Awaiting admin approval</Text>} />
-          )}
-          {approvedEarly && !today?.clock_out && (
-            <Badge status="success" text={<Text type="secondary">Approved — you can clock out</Text>} />
-          )}
-          {today?.clock_out && (
-            <Badge status="success" text={<Text type="secondary">Day complete — see you tomorrow</Text>} />
-          )}
-        </Space>
-      </Card>
-
-      {/* ═══════════ Clock mode modal ═══════════ */}
-      <Modal
-        open={clockModeOpen}
-        title="How are you working today?"
-        footer={null}
-        onCancel={() => setClockModeOpen(false)}
-        centered
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
-      >
-        <Text type="secondary">
-          Choose where you are reporting from to continue with the correct attendance check.
-        </Text>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12, marginTop: 18 }}>
-          <Card size="small" style={{ borderRadius: 12 }}>
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              <WifiOutlined style={{ color: '#15803d', fontSize: 22 }} />
+        {/* ═══════════ Clock mode modal ═══════════ */}
+        <Modal
+          open={clockModeOpen}
+          title={mark('How are you working today?')}
+          footer={null}
+          onCancel={() => setClockModeOpen(false)}
+          centered
+          width={isMobile ? 'calc(100vw - 24px)' : 540}
+        >
+          <Text type="secondary">
+            Choose where you are reporting from so we run the right checks.
+          </Text>
+          <div className="cc-modes">
+            <div className="cc-mode">
+              <WifiOutlined className="cc-mode-ic" />
               <Text strong>On-site</Text>
               <Text type="secondary" style={{ minHeight: 40 }}>
-                Clock in during the configured work hours using the office GPS + Wi-Fi checks.
+                Clock in at the office. We check your GPS and the office Wi-Fi.
               </Text>
               <Button
                 block
@@ -1259,14 +1429,12 @@ export default function Dashboard() {
                     : 'Office checks must pass.'}
                 </Text>
               )}
-            </Space>
-          </Card>
-          <Card size="small" style={{ borderRadius: 12, borderColor: '#bbf7d0' }}>
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              <HomeOutlined style={{ color: '#15803d', fontSize: 22 }} />
+            </div>
+            <div className="cc-mode cc-mode-remote">
+              <HomeOutlined className="cc-mode-ic" />
               <Text strong>Remote</Text>
               <Text type="secondary" style={{ minHeight: 40 }}>
-                Submit your work location, a live selfie, and your current GPS location.
+                Working in the field or from home. Share your location and a live selfie.
               </Text>
               <Button
                 type="primary"
@@ -1283,354 +1451,265 @@ export default function Dashboard() {
               {!canClockIn && clockInUnavailableReason && (
                 <Text type="secondary" style={{ fontSize: 12 }}>{clockInUnavailableReason}</Text>
               )}
-            </Space>
-          </Card>
-        </div>
-      </Modal>
-
-      {/* ═══════════ Remote clock-in modal ═══════════ */}
-      <Modal
-        open={remoteClockInOpen}
-        title="Remote clock-in"
-        okText="Submit & clock in"
-        cancelText="Cancel"
-        confirmLoading={clocking}
-        okButtonProps={{ disabled: !remoteLocation.trim() || !remoteSelfie || !selfieCoordinates }}
-        onOk={() => clockIn('remote')}
-        onCancel={() => {
-          setRemoteClockInOpen(false);
-          setRemoteSelfie(null);
-          setSelfieCoordinates(null);
-          setSelfieCapturedAt(null);
-        }}
-        centered
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
-        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            title="Remote attendance check"
-            description={
-              settings?.work_start && settings?.work_end
-                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live selfie.`
-                : 'Enter your work location, allow GPS, and take a live selfie during working hours.'
-            }
-          />
-          <div>
-            <Text strong>Work location</Text>
-            <Input
-              value={remoteLocation}
-              onChange={(e) => setRemoteLocation(e.target.value)}
-              placeholder="e.g. Client farm, town or site name"
-              maxLength={255}
-              showCount
-              style={{ marginTop: 6 }}
-            />
-          </div>
-          <div>
-            <Text strong>Live selfie at your work location</Text>
-            <Text type="secondary" style={{ display: 'block', marginTop: 2, marginBottom: 8 }}>
-              You must take the photo now — uploading from your gallery is disabled.
-            </Text>
-            {selfiePreview ? (
-              <div>
-                <img
-                  src={selfiePreview}
-                  alt="Selfie preview"
-                  style={{ display: 'block', width: '100%', maxHeight: 240, objectFit: 'cover', borderRadius: 10 }}
-                />
-                {selfieCapturedAt && (
-                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
-                    Captured at {selfieCapturedAt.toLocaleTimeString()}
-                  </Text>
-                )}
-                {selfieCoordinates && (
-                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
-                    GPS captured with selfie: {selfieCoordinates.lat.toFixed(6)}, {selfieCoordinates.lng.toFixed(6)}
-                    {Number.isFinite(selfieCoordinates.accuracy)
-                      ? ` (accuracy ±${Math.round(selfieCoordinates.accuracy)} m)`
-                      : ''}
-                  </Text>
-                )}
-                <Space style={{ marginTop: 8 }}>
-                  <Button icon={<CameraOutlined />} onClick={openCamera} size="small">Retake</Button>
-                  <Button
-                    type="link"
-                    danger
-                    onClick={() => {
-                      setRemoteSelfie(null);
-                      setSelfieCoordinates(null);
-                      setSelfieCapturedAt(null);
-                    }}
-                    style={{ paddingLeft: 0 }}
-                  >
-                    Remove photo
-                  </Button>
-                </Space>
-              </div>
-            ) : (
-              <div>
-                <Button
-                  type="primary"
-                  icon={<CameraOutlined />}
-                  onClick={openCamera}
-                  block
-                  size="large"
-                  style={{ backgroundColor: '#15803d', height: 52, fontSize: 15, fontWeight: 600 }}
-                >
-                  Open camera
-                </Button>
-                <div
-                  style={{
-                    marginTop: 10, padding: '8px 12px', background: '#fffbeb',
-                    border: '1px solid #fde68a', borderRadius: 8, fontSize: 12,
-                    color: '#92400e', lineHeight: 1.5,
-                  }}
-                >
-                  <strong>Note:</strong> you must take a live photo with the camera.
-                </div>
-              </div>
-            )}
-          </div>
-        </Space>
-      </Modal>
-
-      {/* ═══════════ Remote clock-out modal (tasks) ═══════════ */}
-      <Modal
-        open={remoteClockOutOpen}
-        title="Remote clock-out — what did you complete?"
-        okText="Submit & clock out"
-        cancelText="Cancel"
-        confirmLoading={clocking}
-        okButtonProps={{ disabled: remoteTasks.length === 0 }}
-        onOk={() => clockOut(remoteTasks)}
-        onCancel={() => setRemoteClockOutOpen(false)}
-        centered
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            title="List today's completed tasks"
-            description="You must add at least one task before clocking out."
-          />
-          <Space.Compact style={{ width: '100%' }}>
-            <Input
-              value={taskInput}
-              onChange={(e) => setTaskInput(e.target.value)}
-              onKeyDown={handleTaskInputKeyDown}
-              placeholder="e.g. Visited 3 client farms"
-              maxLength={500}
-            />
-            <Button type="primary" onClick={addTask}>Add</Button>
-          </Space.Compact>
-          {remoteTasks.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {remoteTasks.map((t, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    background: '#f8fafc', border: '1px solid #e2e8f0',
-                    borderRadius: 8, padding: '6px 10px',
-                  }}
-                >
-                  <Text style={{ flex: 1 }}>{i + 1}. {t}</Text>
-                  <Button type="link" danger size="small" onClick={() => removeTask(i)}>
-                    Remove
-                  </Button>
-                </div>
-              ))}
             </div>
-          ) : (
-            <Text type="secondary">No tasks added yet.</Text>
-          )}
-        </Space>
-      </Modal>
-
-      {/* ═══════════ Early leave modal ═══════════ */}
-      <Modal
-        open={earlyModalOpen}
-        title="Request early clock-out"
-        okText="Submit request"
-        cancelText="Cancel"
-        confirmLoading={submittingRequest}
-        onOk={submitEarlyRequest}
-        onCancel={() => setEarlyModalOpen(false)}
-        centered
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="warning"
-            showIcon
-            title="Admin approval required"
-            description="You cannot clock out before your scheduled end time without approval. Your request will go to an administrator."
-          />
-          <div>
-            <Text strong>Reason</Text>
-            <TextArea
-              value={earlyReason}
-              onChange={(e) => setEarlyReason(e.target.value)}
-              rows={4}
-              maxLength={5000}
-              showCount
-              placeholder="Explain why you need to leave early"
-              style={{ marginTop: 6 }}
-            />
           </div>
-        </Space>
-      </Modal>
+        </Modal>
 
-      {/* ═══════════ Camera capture modal ═══════════ */}
-      <Modal
-        open={cameraOpen}
-        title="Take a selfie"
-        onCancel={closeCamera}
-        footer={null}
-        centered
-        width={isMobile ? 'calc(100vw - 24px)' : 560}
-        destroyOnClose
-        styles={{ body: { padding: 12 } }}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {cameraError ? (
-            <Alert type="error" showIcon title="Camera unavailable" description={cameraError} />
-          ) : (
-            <div
-              style={{
-                position: 'relative', width: '100%', background: '#000',
-                borderRadius: 12, overflow: 'hidden', aspectRatio: '4 / 3',
-              }}
-            >
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                style={{
-                  width: '100%', height: '100%', objectFit: 'cover',
-                  display: 'block', transform: 'scaleX(-1)',
-                }}
+        {/* ═══════════ Remote clock-in modal ═══════════ */}
+        <Modal
+          open={remoteClockInOpen}
+          title={mark('Remote clock-in')}
+          okText="Submit and clock in"
+          cancelText="Cancel"
+          confirmLoading={clocking}
+          okButtonProps={{ disabled: !remoteLocation.trim() || !remoteSelfie || !selfieCoordinates }}
+          onOk={() => clockIn('remote')}
+          onCancel={() => {
+            setRemoteClockInOpen(false);
+            setRemoteSelfie(null);
+            setSelfieCoordinates(null);
+            setSelfieCapturedAt(null);
+          }}
+          centered
+          width={isMobile ? 'calc(100vw - 24px)' : 520}
+          styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
+        >
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              title="Remote attendance check"
+              description={
+                settings?.work_start && settings?.work_end
+                  ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live selfie.`
+                  : 'Enter your work location, allow GPS, and take a live selfie during working hours.'
+              }
+            />
+            <div>
+              <Text strong>Work location</Text>
+              <Input
+                value={remoteLocation}
+                onChange={(e) => setRemoteLocation(e.target.value)}
+                placeholder="e.g. Client farm, town or site name"
+                maxLength={255}
+                showCount
+                style={{ marginTop: 6 }}
               />
-              {!cameraReady && !cameraError && (
-                <div
-                  style={{
-                    position: 'absolute', inset: 0, display: 'flex',
-                    alignItems: 'center', justifyContent: 'center',
-                    color: '#fff', fontSize: 13,
-                  }}
-                >
-                  Starting camera…
+            </div>
+            <div>
+              <Text strong>Live selfie at your work location</Text>
+              <Text type="secondary" style={{ display: 'block', marginTop: 2, marginBottom: 8 }}>
+                Take the photo now. Uploading from your gallery is disabled.
+              </Text>
+              {selfiePreview ? (
+                <div>
+                  <img
+                    src={selfiePreview}
+                    alt="Selfie preview"
+                    style={{ display: 'block', width: '100%', maxHeight: 240, objectFit: 'cover', borderRadius: 12 }}
+                  />
+                  {selfieCapturedAt && (
+                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+                      Captured at {selfieCapturedAt.toLocaleTimeString()}
+                    </Text>
+                  )}
+                  {selfieCoordinates && (
+                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
+                      GPS captured with selfie: {selfieCoordinates.lat.toFixed(6)}, {selfieCoordinates.lng.toFixed(6)}
+                      {Number.isFinite(selfieCoordinates.accuracy)
+                        ? ` (accuracy ±${Math.round(selfieCoordinates.accuracy)} m)`
+                        : ''}
+                    </Text>
+                  )}
+                  <Space style={{ marginTop: 8 }}>
+                    <Button icon={<CameraOutlined />} onClick={openCamera} size="small">Retake</Button>
+                    <Button
+                      type="link"
+                      danger
+                      onClick={() => {
+                        setRemoteSelfie(null);
+                        setSelfieCoordinates(null);
+                        setSelfieCapturedAt(null);
+                      }}
+                      style={{ paddingLeft: 0 }}
+                    >
+                      Remove photo
+                    </Button>
+                  </Space>
+                </div>
+              ) : (
+                <div>
+                  <Button
+                    type="primary"
+                    icon={<CameraOutlined />}
+                    onClick={openCamera}
+                    block
+                    size="large"
+                    className="cc-btn cc-btn-in"
+                  >
+                    Open camera
+                  </Button>
+                  <div
+                    style={{
+                      marginTop: 10, padding: '8px 12px', background: '#fdf3e1',
+                      border: '1px solid #f1dcae', borderRadius: 10, fontSize: 12,
+                      color: '#7a4a12', lineHeight: 1.5,
+                    }}
+                  >
+                    <strong>Note:</strong> you must take a live photo with the camera.
+                  </div>
                 </div>
               )}
             </div>
-          )}
-          <Button
-            type="primary"
-            block
-            size="large"
-            icon={<CameraOutlined />}
-            loading={capturingSelfie}
-            disabled={!cameraReady || !!cameraError}
-            onClick={captureFromCamera}
-            style={{ backgroundColor: cameraReady ? '#15803d' : undefined }}
-          >
-            Capture photo
-          </Button>
-        </Space>
-      </Modal>
+          </Space>
+        </Modal>
 
-      {/* ═══════════ Recent history ═══════════ */}
-      <Card title="Recent attendance" variant="borderless" className="shadow-sm">
-        {isMobile ? (
-          recentHistory.length === 0 ? (
-            <Text type="secondary">No records yet.</Text>
-          ) : (
-            recentHistory.map((r) => (
-              <div
-                key={r.id}
-                style={{
-                  background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12,
-                  padding: '12px 14px', marginBottom: 10,
-                  display: 'flex', flexDirection: 'column', gap: 8,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div
-                      style={{
-                        width: 32, height: 32, borderRadius: 8,
-                        background: '#ecfdf5', color: '#065f46',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14,
-                      }}
-                    >
-                      <ClockCircleOutlined />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
-                        {String(r.attendance_date).slice(0, 10)}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#64748b' }}>
-                        {r.early_leave_reason ? 'Left early' : 'Full day'}
-                      </div>
-                    </div>
-                  </div>
-                  <Tag
-                    color={statusColor[r.status] || 'default'}
-                    style={{ margin: 0, borderRadius: 10, textTransform: 'capitalize' }}
-                  >
-                    {r.status}
-                  </Tag>
-                </div>
-                <div
-                  style={{
-                    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
-                    background: '#f8fafc', borderRadius: 8, padding: '8px 10px',
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>In</div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#16a34a' }}>{r.clock_in || '—'}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Out</div>
-                    <div
-                      style={{
-                        fontSize: 14, fontWeight: 600,
-                        color: r.clock_out ? '#d97706' : '#94a3b8',
-                      }}
-                    >
-                      {r.clock_out || '—'}
-                    </div>
-                    <AttendanceRecordTag record={r} />
-                  </div>
-                </div>
-                {r.early_leave_reason && (
+        {/* ═══════════ Remote clock-out modal (tasks) ═══════════ */}
+        <Modal
+          open={remoteClockOutOpen}
+          title={mark('What did you complete today?')}
+          okText="Submit and clock out"
+          cancelText="Cancel"
+          confirmLoading={clocking}
+          okButtonProps={{ disabled: remoteTasks.length === 0 }}
+          onOk={() => clockOut(remoteTasks)}
+          onCancel={() => setRemoteClockOutOpen(false)}
+          centered
+          width={isMobile ? 'calc(100vw - 24px)' : 520}
+        >
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              title="List today's completed tasks"
+              description="Add at least one task before clocking out."
+            />
+            <Space.Compact style={{ width: '100%' }}>
+              <Input
+                value={taskInput}
+                onChange={(e) => setTaskInput(e.target.value)}
+                onKeyDown={handleTaskInputKeyDown}
+                placeholder="e.g. Visited 3 client farms"
+                maxLength={500}
+              />
+              <Button type="primary" onClick={addTask}>Add</Button>
+            </Space.Compact>
+            {remoteTasks.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {remoteTasks.map((t, i) => (
                   <div
+                    key={i}
                     style={{
-                      fontSize: 11, color: '#92400e', background: '#fffbeb',
-                      border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px',
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      background: '#faf7f3', border: '1px solid #e6ded4',
+                      borderRadius: 10, padding: '6px 10px',
                     }}
                   >
-                    <strong>Reason:</strong> {r.early_leave_reason}
+                    <Text style={{ flex: 1 }}>{i + 1}. {t}</Text>
+                    <Button type="link" danger size="small" onClick={() => removeTask(i)}>
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Text type="secondary">No tasks added yet.</Text>
+            )}
+          </Space>
+        </Modal>
+
+        {/* ═══════════ Early leave modal ═══════════ */}
+        <Modal
+          open={earlyModalOpen}
+          title={mark('Request early clock-out')}
+          okText="Send request"
+          cancelText="Cancel"
+          confirmLoading={submittingRequest}
+          onOk={submitEarlyRequest}
+          onCancel={() => setEarlyModalOpen(false)}
+          centered
+          width={isMobile ? 'calc(100vw - 24px)' : 520}
+        >
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Alert
+              type="warning"
+              showIcon
+              title="Admin approval required"
+              description="You cannot clock out before your scheduled end time without approval. Your request will go to an administrator."
+            />
+            <div>
+              <Text strong>Reason</Text>
+              <TextArea
+                value={earlyReason}
+                onChange={(e) => setEarlyReason(e.target.value)}
+                rows={4}
+                maxLength={5000}
+                showCount
+                placeholder="Explain why you need to leave early"
+                style={{ marginTop: 6 }}
+              />
+            </div>
+          </Space>
+        </Modal>
+
+        {/* ═══════════ Camera capture modal ═══════════ */}
+        <Modal
+          open={cameraOpen}
+          title={mark('Take a selfie')}
+          onCancel={closeCamera}
+          footer={null}
+          centered
+          width={isMobile ? 'calc(100vw - 24px)' : 560}
+          destroyOnClose
+          styles={{ body: { padding: 12 } }}
+        >
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            {cameraError ? (
+              <Alert type="error" showIcon title="Camera unavailable" description={cameraError} />
+            ) : (
+              <div
+                style={{
+                  position: 'relative', width: '100%', background: '#000',
+                  borderRadius: 14, overflow: 'hidden', aspectRatio: '4 / 3',
+                }}
+              >
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  style={{
+                    width: '100%', height: '100%', objectFit: 'cover',
+                    display: 'block', transform: 'scaleX(-1)',
+                  }}
+                />
+                {!cameraReady && !cameraError && (
+                  <div
+                    style={{
+                      position: 'absolute', inset: 0, display: 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      color: '#fff', fontSize: 13,
+                    }}
+                  >
+                    Starting camera…
                   </div>
                 )}
               </div>
-            ))
-          )
-        ) : (
-          <Table
-            dataSource={recentHistory}
-            columns={columns}
-            rowKey="id"
-            pagination={false}
-            size="middle"
-          />
-        )}
-      </Card>
-    </div>
+            )}
+            <Button
+              type="primary"
+              block
+              size="large"
+              icon={<CameraOutlined />}
+              loading={capturingSelfie}
+              disabled={!cameraReady || !!cameraError}
+              onClick={captureFromCamera}
+              className="cc-btn cc-btn-in"
+            >
+              Capture photo
+            </Button>
+          </Space>
+        </Modal>
+      </div>
+    </ConfigProvider>
   );
 }
