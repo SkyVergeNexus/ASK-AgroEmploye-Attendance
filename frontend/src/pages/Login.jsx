@@ -46,11 +46,11 @@ export default function Login() {
     : { backgroundImage: DEFAULT_GRADIENT };
 
   const onFinish = async (values) => {
-    const employeeCode = values.employee_code.trim().toUpperCase();
+    const loginIdentifier = values.employee_code.trim();
     setBusy(true);
     try {
       const { data } = await api.post('/auth/login', {
-        employee_code: employeeCode,
+        employee_code: loginIdentifier,
         password: values.password,
       });
       login(data.token, data.user);
@@ -61,7 +61,7 @@ export default function Login() {
       const msg = err.response?.data?.message || 'Login failed';
 
       if (status === 403 && /pending/i.test(msg)) {
-        setPendingCode(employeeCode);
+        setPendingCode(loginIdentifier);
         setPendingOpen(true);
       } else if (status === 403 && /disabled/i.test(msg)) {
         Modal.error({

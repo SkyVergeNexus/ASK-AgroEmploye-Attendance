@@ -191,57 +191,44 @@ router.post('/register', upload.single('picture'), async (req, res) => {
 
 // ============ LOGIN ============
 router.post('/login', async (req, res) => {
-  console.log('==========================================');
-  console.log('[login] REQUEST RECEIVED at', new Date().toISOString());
-  console.log('[login] staff ID:', req.body?.employee_code);
-  console.log('==========================================');
-
   const { employee_code, password } = req.body;
 
   if (!employee_code?.trim() || !password) {
-    console.log('[login] MISSING staff ID or password');
     return res.status(400).json({
       message: 'Staff ID and password are required',
     });
   }
 
   try {
-    const code = employee_code.trim().toUpperCase();
+    const identifier = employee_code.trim();
+    const emailLogin = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+    const lookupValue = emailLogin
+      ? identifier.toLowerCase()
+      : identifier.toUpperCase();
     const [rows] = await pool.query(
       `SELECT e.*, d.name AS department_name, r.name AS role_name
        FROM employees e
        LEFT JOIN departments d ON e.department_id = d.id
        LEFT JOIN roles r ON e.role_id = r.id
-       WHERE e.employee_code = ?`,
-      [code]
+       WHERE ${emailLogin ? 'e.email = ? AND e.system_role = ?' : 'e.employee_code = ?'}`,
+      emailLogin ? [lookupValue, 'admin'] : [lookupValue]
     );
 
     if (!rows.length) {
-      console.log('[login] NO USER FOUND for staff ID:', code);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     const user = rows[0];
-    console.log('[login] user found:', {
-      id: user.id,
-      email: user.email,
-      is_active: user.is_active,
-      is_approved: user.is_approved,
-      system_role: user.system_role,
-    });
 
     const valid = await bcrypt.compare(password, user.password_hash);
-    console.log('[login] password valid:', valid);
 
     if (!valid) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
     if (!user.is_active) {
-      console.log('[login] ACCOUNT DISABLED');
       return res.status(403).json({ message: 'Account disabled' });
     }
     if (!user.is_approved) {
-      console.log('[login] ACCOUNT NOT APPROVED');
       const approvalMessage = user.approval_status === 'rejected'
         ? 'Your registration was not approved. Contact the office if you need more information.'
         : user.approval_status === 'revoked'
@@ -266,7 +253,6 @@ router.post('/login', async (req, res) => {
       /* ignore */
     }
 
-    console.log('[login] SUCCESS — issued token for user', user.id);
     res.json({
       token,
       login_cover_url,
@@ -288,12 +274,10 @@ router.post('/login', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('==========================================');
     console.error('[login] UNEXPECTED ERROR');
     console.error('[login] err.code:', err.code);
     console.error('[login] err.message:', err.message);
     console.error('[login] err.stack:', err.stack);
-    console.error('==========================================');
     res.status(500).json({ message: 'Login failed' });
   }
 });
