@@ -7,15 +7,14 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   LockOutlined,
-  MailOutlined,
   LockFilled,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { API_ORIGIN, assetUrl } from '../config';
 
 const { Title, Text } = Typography;
-const COMPANY_EMAIL_SUFFIX = '@angelcommoditiesltd.org';
 
 const DEFAULT_GRADIENT =
   'linear-gradient(135deg, #065f46 0%, #047857 50%, #065f46 100%)';
@@ -26,7 +25,7 @@ export default function Login() {
   const [form] = Form.useForm();
   const [busy, setBusy] = useState(false);
   const [pendingOpen, setPendingOpen] = useState(false);
-  const [pendingEmail, setPendingEmail] = useState('');
+  const [pendingCode, setPendingCode] = useState('');
 
   const [coverUrl, setCoverUrl] = useState(null);
 
@@ -47,11 +46,11 @@ export default function Login() {
     : { backgroundImage: DEFAULT_GRADIENT };
 
   const onFinish = async (values) => {
-    const email = `${values.email_local_part.trim()}${COMPANY_EMAIL_SUFFIX}`;
+    const employeeCode = values.employee_code.trim().toUpperCase();
     setBusy(true);
     try {
       const { data } = await api.post('/auth/login', {
-        email,
+        employee_code: employeeCode,
         password: values.password,
       });
       login(data.token, data.user);
@@ -62,7 +61,7 @@ export default function Login() {
       const msg = err.response?.data?.message || 'Login failed';
 
       if (status === 403 && /pending/i.test(msg)) {
-        setPendingEmail(email);
+        setPendingCode(employeeCode);
         setPendingOpen(true);
       } else if (status === 403 && /disabled/i.test(msg)) {
         Modal.error({
@@ -122,19 +121,12 @@ export default function Login() {
           size="large"
         >
           <Form.Item
-            name="email_local_part"
-            rules={[
-              { required: true, message: 'Company email is required' },
-              {
-                pattern: /^[a-z0-9._%+-]+$/i,
-                message: 'Enter only the part before @',
-              },
-            ]}
+            name="employee_code"
+            rules={[{ required: true, message: 'Staff ID is required' }]}
           >
             <Input
-              prefix={<MailOutlined style={{ color: '#94a3b8' }} />}
-              placeholder="wisdom"
-              addonAfter={COMPANY_EMAIL_SUFFIX}
+              prefix={<IdcardOutlined style={{ color: '#94a3b8' }} />}
+              placeholder="ANG-STAFF-001"
               autoComplete="username"
             />
           </Form.Item>
@@ -211,7 +203,7 @@ export default function Login() {
               <div>• This usually takes a few minutes during working hours.</div>
               <div>
                 • If you believe this is taking too long, contact HR or your
-                supervisor and mention the email below.
+                supervisor and mention the staff ID below.
               </div>
             </div>
           }
@@ -228,8 +220,8 @@ export default function Login() {
         >
           <Space>
             <LockOutlined style={{ color: '#64748b' }} />
-            <Text strong>Account:</Text>
-            <Text code>{pendingEmail}</Text>
+            <Text strong>Staff ID:</Text>
+            <Text code>{pendingCode}</Text>
           </Space>
         </div>
 

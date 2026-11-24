@@ -10,7 +10,7 @@ exports.up = async function (db) {
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       read_at TIMESTAMP NULL DEFAULT NULL,
       CONSTRAINT fk_notifications_employee
-        FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+        FOREIGN KEY (employee_id) REFERENCES employee0s(id) ON DELETE CASCADE,
       INDEX idx_notifications_employee_unread (employee_id, read_at, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);

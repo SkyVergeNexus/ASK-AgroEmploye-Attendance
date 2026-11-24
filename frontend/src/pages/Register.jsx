@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Form, Input, Select, Button, Typography, Upload, Row, Col, Alert,
+  Form, Input, Select, Radio, Button, Typography, Upload, Row, Col, Alert,
   message, Steps, Divider,
 } from 'antd';
 import {
@@ -22,6 +22,7 @@ const DEFAULT_GRADIENT =
 export default function Register() {
   const nav = useNavigate();
   const [form] = Form.useForm();
+  const emailType = Form.useWatch('email_type', form) || 'organization';
 
   const [current, setCurrent] = useState(0);
   const [departments, setDepartments] = useState([]);
@@ -77,7 +78,7 @@ export default function Register() {
   };
 
   const stepFieldMap = {
-    0: ['employee_code', 'full_name', 'email_local_part', 'phone'],
+    0: ['employee_code', 'full_name', 'email_type', 'email', 'phone'],
     1: ['password', 'confirm_password'],
     2: ['gender', 'department_id', 'role_id'],
   };
@@ -94,16 +95,13 @@ export default function Register() {
   const prev = () => setCurrent((c) => Math.max(0, c - 1));
 
   const onFinish = async (values) => {
-    console.log('[register] form values:', values);
     setBusy(true);
     try {
       const fd = new FormData();
-      fd.append('employee_code', (values.employee_code || '').trim());
+      fd.append('employee_code', (values.employee_code || '').trim().toUpperCase());
       fd.append('full_name', (values.full_name || '').trim());
-      fd.append(
-        'email',
-        `${(values.email_local_part || '').trim()}${COMPANY_EMAIL_SUFFIX}`
-      );
+      fd.append('email', (values.email || '').trim());
+      fd.append('email_type', values.email_type);
       fd.append('password', values.password);
       fd.append('confirm_password', values.confirm_password);
       if (values.phone) fd.append('phone', values.phone.trim());
@@ -119,8 +117,6 @@ export default function Register() {
       message.success('Account created. Please sign in.');
       nav('/login');
     } catch (err) {
-      console.error('[register] FULL ERROR:', err);
-      console.error('[register] RESPONSE:', err.response);
       const msg =
         err.response?.data?.message ||
         err.message ||
@@ -147,11 +143,17 @@ export default function Register() {
         <Form.Item
           label="Staff ID"
           name="employee_code"
-          rules={[{ required: true, message: 'Staff ID is required' }]}
+          rules={[
+            { required: true, message: 'Staff ID is required' },
+            {
+              pattern: /^ANG-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d{3}$/i,
+              message: 'Use the format ANG-anything-001',
+            },
+          ]}
         >
           <Input
             prefix={<IdcardOutlined style={{ color: '#94a3b8' }} />}
-            placeholder="ASK-002"
+            placeholder="ANG-STAFF-001"
           />
         </Form.Item>
       </Col>
@@ -172,21 +174,56 @@ export default function Register() {
       </Col>
       <Col xs={24}>
         <Form.Item
-          label="Email"
-          name="email_local_part"
+          label="Email type"
+          name="email_type"
+          initialValue="organization"
+          rules={[{ required: true, message: 'Choose an email type' }]}
+        >
+          <Radio.Group
+            options={[
+              { label: 'Organization email', value: 'organization' },
+              { label: 'Personal email', value: 'personal' },
+            ]}
+            optionType="button"
+            buttonStyle="solid"
+          />
+        </Form.Item>
+        <Form.Item
+          label={emailType === 'organization' ? 'Organization email' : 'Personal email'}
+          name="email"
           rules={[
-            { required: true, message: 'Company email is required' },
             {
-              pattern: /^[a-z0-9._%+-]+$/i,
-              message: 'Enter only the part before @',
+              required: true,
+              message: 'Email is required',
+            },
+            {
+              type: 'email',
+              message: 'Enter a valid email address',
+            },
+            {
+              validator: (_, value) => {
+                if (
+                  !value ||
+                  emailType !== 'organization' ||
+                  value.trim().toLowerCase().endsWith(COMPANY_EMAIL_SUFFIX)
+                ) {
+                  return Promise.resolve();
+                }
+                return Promise.reject(
+                  new Error(`Use your organization email ending in ${COMPANY_EMAIL_SUFFIX}`)
+                );
+              },
             },
           ]}
         >
           <Input
             prefix={<MailOutlined style={{ color: '#94a3b8' }} />}
-            placeholder="wisdom"
-            addonAfter={COMPANY_EMAIL_SUFFIX}
-            autoComplete="username"
+            placeholder={
+              emailType === 'organization'
+                ? `name${COMPANY_EMAIL_SUFFIX}`
+                : 'name@example.com'
+            }
+            autoComplete="email"
           />
         </Form.Item>
       </Col>

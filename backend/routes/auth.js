@@ -13,7 +13,6 @@ router.post('/register', upload.single('picture'), async (req, res) => {
   console.log('==========================================');
   console.log('[register] REQUEST RECEIVED at', new Date().toISOString());
   console.log('[register] Content-Type:', req.headers['content-type']);
-  console.log('[register] body:', req.body);
   console.log('[register] file:', req.file ? req.file.filename : 'no file');
   console.log('==========================================');
 
@@ -21,6 +20,7 @@ router.post('/register', upload.single('picture'), async (req, res) => {
     employee_code,
     full_name,
     email,
+    email_type,
     password,
     confirm_password,
     phone,
@@ -36,12 +36,14 @@ router.post('/register', upload.single('picture'), async (req, res) => {
       !employee_code?.trim() ||
       !full_name?.trim() ||
       !email?.trim() ||
+      !email_type?.trim() ||
       !password?.trim()
     ) {
       console.log('[register] MISSING required fields:', {
         employee_code: !!employee_code,
         full_name: !!full_name,
         email: !!email,
+        email_type: !!email_type,
         password: !!password,
       });
       return res.status(400).json({ message: 'Missing required fields' });
@@ -58,12 +60,30 @@ router.post('/register', upload.single('picture'), async (req, res) => {
       return res.status(400).json({ message: 'Passwords do not match' });
     }
 
-    const code = employee_code.trim();
+    const code = employee_code.trim().toUpperCase();
     const name = full_name.trim();
-    const mail = normalizeCompanyEmail(email);
-    if (!mail) {
+    if (!/^ANG-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d{3}$/.test(code)) {
       return res.status(400).json({
-        message: 'Use your company email ending in @angelcommoditiesltd.org',
+        message: 'Staff ID must use the format ANG-anything-001',
+      });
+    }
+
+    if (!['organization', 'personal'].includes(email_type.trim())) {
+      return res.status(400).json({
+        message: 'Choose an organization or personal email',
+      });
+    }
+
+    const mail = email.trim().toLowerCase();
+    if (mail.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+      return res.status(400).json({ message: 'Enter a valid email address' });
+    }
+    if (
+      email_type.trim() === 'organization' &&
+      !normalizeCompanyEmail(mail)
+    ) {
+      return res.status(400).json({
+        message: 'Use your organization email ending in @angelcommoditiesltd.org',
       });
     }
 
@@ -173,35 +193,31 @@ router.post('/register', upload.single('picture'), async (req, res) => {
 router.post('/login', async (req, res) => {
   console.log('==========================================');
   console.log('[login] REQUEST RECEIVED at', new Date().toISOString());
-  console.log('[login] email:', req.body?.email);
+  console.log('[login] staff ID:', req.body?.employee_code);
   console.log('==========================================');
 
-  const { email, password } = req.body;
+  const { employee_code, password } = req.body;
 
-  if (!email?.trim() || !password) {
-    console.log('[login] MISSING email or password');
-    return res.status(400).json({ message: 'Email and password are required' });
-  }
-
-  const mail = normalizeCompanyEmail(email);
-  if (!mail) {
+  if (!employee_code?.trim() || !password) {
+    console.log('[login] MISSING staff ID or password');
     return res.status(400).json({
-      message: 'Use your company email ending in @angelcommoditiesltd.org',
+      message: 'Staff ID and password are required',
     });
   }
 
   try {
+    const code = employee_code.trim().toUpperCase();
     const [rows] = await pool.query(
       `SELECT e.*, d.name AS department_name, r.name AS role_name
        FROM employees e
        LEFT JOIN departments d ON e.department_id = d.id
        LEFT JOIN roles r ON e.role_id = r.id
-       WHERE e.email = ?`,
-      [mail]
+       WHERE e.employee_code = ?`,
+      [code]
     );
 
     if (!rows.length) {
-      console.log('[login] NO USER FOUND for email:', email);
+      console.log('[login] NO USER FOUND for staff ID:', code);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
