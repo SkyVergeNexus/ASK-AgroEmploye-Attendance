@@ -372,7 +372,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
     const diffMin = (now - workStart) / 60000;
     const status = diffMin > lateThreshold ? 'late' : 'present';
 
-    // FIX: presence_state is NOT NULL, so it always gets a value ('unknown'),
+    // presence_state is NOT NULL, so it always gets a value ('unknown'),
     // for remote workers too. presence_last_seen_at is only set for on-site.
     await pool.query(
       `INSERT INTO attendance
@@ -535,13 +535,17 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       }
     }
 
-    // FIX: presence_state is NOT NULL, so reset it to 'unknown' instead of NULL.
+    // presence_state is NOT NULL, so reset it to 'unknown' instead of NULL.
+    // needs_review is cleared here too: a successful manual clock-out means the
+    // record is complete, so any stale review flag (from any prior system) is
+    // no longer valid.
     const [result] = await pool.query(
       `UPDATE attendance
        SET clock_out = ?,
            early_leave_reason = ?,
            tasks_completed = ?,
            after_close_tracking = 0,
+           needs_review = 0,
            presence_state = ?,
            presence_outside_count = 0,
            presence_outside_since = NULL
@@ -608,10 +612,12 @@ router.get('/today', verifyToken, async (req, res) => {
 // ============================================================
 //  PRESENCE TRACKING
 //  - Used while on-site. After work_end, employees still inside
-//    keep being tracked until they step outside (which is only
-//    recorded as a presence event — NOT an auto clock-out).
-//  - If they never clock out and 24h elapse, the scheduler flags
-//    the record needs_review=1 (see helpers/presenceScheduler.js).
+//    keep being tracked until they step outside (recorded as a
+//    presence event only — NOT an auto clock-out).
+//  - If they never clock out, the record simply stays open. Admins
+//    can resolve it manually via /needs-review (see the admin
+//    section below), or the employee can clock out themselves at
+//    any later time and the actual clock-out time is recorded.
 // ============================================================
 router.get('/presence/active', verifyToken, async (req, res) => {
   try {
@@ -779,7 +785,7 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
         );
       }
 
-      // after_close_tracking is purely informational now — no auto clock-out.
+      // after_close_tracking is purely informational — no auto clock-out.
       const nextAfterClose =
         pastClosing && nextState === 'inside'
           ? 1
@@ -1305,7 +1311,13 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
 });
 
 // ============================================================
-//  ADMIN REVIEW — flagged records (24h missed clock-out)
+//  ADMIN REVIEW — flagged records
+//  A record is flagged when needs_review = 1 AND admin_resolved = 0
+//  AND clock_out IS NULL. With the auto-clock-out system removed,
+//  a record is only flagged when an admin explicitly flags it (or
+//  by any future rule you decide to add). A successful manual
+//  clock-out clears needs_review, so completed records never
+//  appear in this queue.
 // ============================================================
 router.get('/needs-review', verifyToken, isAdmin, async (req, res) => {
   try {
