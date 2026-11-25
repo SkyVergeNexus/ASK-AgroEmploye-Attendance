@@ -40,7 +40,7 @@ const FEED_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'clock', label: 'Clock' },
   { key: 'early', label: 'Early leaves' },
-  { key: 'leave', label: 'Leave' },              // ⬅️ NEW
+  { key: 'leave', label: 'Leave' },
   { key: 'registration', label: 'Registrations' },
   { key: 'guest', label: 'Guests' },
 ];
@@ -61,48 +61,70 @@ export default function AdminDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [feedFilter, setFeedFilter] = useState('all');
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
-  const [pendingLeaveRequests, setPendingLeaveRequests] = useState([]); // ⬅️ NEW
+  const [pendingLeaveRequests, setPendingLeaveRequests] = useState([]);
 
   const load = useCallback(async (dateKey) => {
     setLoading(true);
-    try {
-      // ⬅️ CHANGED: added leaveRes to the Promise.all
-      const [
-        statsRes, settingsRes, earlyRes, activityRes, guestStatsRes, needsReviewRes,
-        leaveRes,
-      ] = await Promise.all([
-        api.get('/attendance/stats'),
-        api.get('/settings'),
-        api.get('/attendance/early-leave/all', { params: { status: 'pending' } }),
-        api.get('/attendance/activity-feed', {
-          params: { from: dateKey, to: dateKey, limit: 150 },
-        }),
-        api.get('/guests/stats'),
-        api.get('/attendance/needs-review'),
-        // ⬅️ NEW: pending leave requests
-        api.get('/leave-requests', { params: { status: 'pending' } }),
-      ]);
+    // Use allSettled so one failing endpoint can't blank the entire dashboard
+    const results = await Promise.allSettled([
+      api.get('/attendance/stats'),
+      api.get('/settings'),
+      api.get('/attendance/early-leave/all', { params: { status: 'pending' } }),
+      api.get('/attendance/activity-feed', {
+        params: { from: dateKey, to: dateKey, limit: 150 },
+      }),
+      api.get('/guests/stats'),
+      api.get('/attendance/needs-review'),
+      // ✅ REAL ENDPOINT (the previous /leave-requests?status=pending was 404)
+      api.get('/leave-requests/admin'),
+    ]);
 
-      setStats(statsRes.data);
-      setSettings(settingsRes.data);
-      setEarlyRequests(earlyRes.data || []);
-      setActivity(activityRes.data || []);
-      setGuestStats(guestStatsRes.data || { total: 0, today: 0, week: 0 });
-      setNeedsReviewCount((needsReviewRes.data || []).length);
-      // ⬅️ NEW
-      const leaveData = leaveRes.data;
-      setPendingLeaveRequests(
-        Array.isArray(leaveData)
-          ? leaveData
-          : (leaveData?.requests || leaveData?.data || [])
-      );
+    const dataAt = (i, fallback) =>
+      results[i].status === 'fulfilled' ? results[i].value.data : fallback;
+    const okAt = (i) => results[i].status === 'fulfilled';
+
+    // Log any failed calls so they're visible in the console
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        console.warn(
+          `[AdminDashboard] request #${i} failed:`,
+          r.reason?.response?.status,
+          r.reason?.config?.url
+        );
+      }
+    });
+
+    setStats(dataAt(0, stats));
+    setSettings(dataAt(1, null));
+    setEarlyRequests(dataAt(2, []) || []);
+    setActivity(dataAt(3, []) || []);
+    setGuestStats(dataAt(4, { total: 0, today: 0, week: 0 }) || { total: 0, today: 0, week: 0 });
+    setNeedsReviewCount((dataAt(5, []) || []).length);
+
+    // Normalise whatever shape the backend returns, then keep only pending
+    const leaveData = dataAt(6, []);
+    const leaveArr = Array.isArray(leaveData)
+      ? leaveData
+      : (leaveData?.requests || leaveData?.data || []);
+    setPendingLeaveRequests(
+      leaveArr.filter((r) => String(r.status).toLowerCase() === 'pending')
+    );
+
+    if (results.every(okAt)) {
       setLastUpdated(new Date());
-    } catch (err) {
-      message.error(err.response?.data?.message || 'Failed to load dashboard');
-    } finally {
-      setLoading(false);
+    } else if (results.some(okAt)) {
+      setLastUpdated(new Date());
+      // Silent — individual warnings already logged above
+    } else {
+      // Every single call failed
+      const firstErr = results.find((r) => r.status === 'rejected')?.reason;
+      message.error(
+        firstErr?.response?.data?.message || 'Failed to load dashboard'
+      );
     }
-  }, []);
+
+    setLoading(false);
+  }, [stats]);
 
   useEffect(() => {
     const tick = () => {
@@ -133,7 +155,6 @@ export default function AdminDashboard() {
     } else if (feedFilter === 'early') {
       filtered = activity.filter((e) => e.kind.startsWith('early'));
     } else if (feedFilter === 'leave') {
-      // ⬅️ NEW
       filtered = activity.filter((e) => e.kind.startsWith('leave'));
     } else if (feedFilter === 'registration') {
       filtered = activity.filter((e) => e.kind === 'registration');
@@ -145,9 +166,9 @@ export default function AdminDashboard() {
 
   const pendingCount = earlyRequests.length;
   const guestTodayCount = guestStats.today;
-  const pendingLeaveCount = pendingLeaveRequests.length; // ⬅️ NEW
+  const pendingLeaveCount = pendingLeaveRequests.length;
 
-  // ⬅️ NEW: normalise whichever shape the backend returns
+  // Normalisers — tolerant of whichever shape the backend returns
   const leaveDisplayName = (r) =>
     r.full_name || r.employee?.full_name || r.employee_name || 'Unknown';
   const leaveDisplayCode = (r) =>
@@ -192,7 +213,6 @@ export default function AdminDashboard() {
           return <div style={{ ...baseStyle, background: '#ecfdf5', color: '#16a34a' }}><CheckOutlined /></div>;
         case 'early-rejected':
           return <div style={{ ...baseStyle, background: '#fef2f2', color: '#dc2626' }}><CloseOutlined /></div>;
-        // ⬅️ NEW: leave-request icon
         case 'leave-request':
           return <div style={{ ...baseStyle, background: '#eef2ff', color: '#4f46e5' }}><CalendarOutlined /></div>;
         case 'registration':
@@ -333,7 +353,6 @@ export default function AdminDashboard() {
             </>
           );
 
-        // ⬅️ NEW: activity feed renderer for leave requests
         case 'leave-request':
           return (
             <>
@@ -440,7 +459,7 @@ export default function AdminDashboard() {
         </Space>
       </div>
 
-      {/* ⬅️ NEW: Leave request alert banner */}
+      {/* Leave request alert banner */}
       {pendingLeaveCount > 0 && (
         <Alert
           type="info"
@@ -587,7 +606,6 @@ export default function AdminDashboard() {
           </Card>
         </Col>
 
-        {/* ⬅️ NEW: Pending Leave Requests stat card */}
         <Col xs={12} md={8}>
           <Card
             bordered={false}
@@ -612,7 +630,7 @@ export default function AdminDashboard() {
         </Col>
       </Row>
 
-      {/* ── Reports button ── */}
+      {/* Reports button */}
       <div
         style={{
           display: 'flex',
@@ -685,7 +703,7 @@ export default function AdminDashboard() {
                   count = activity.filter((e) => e.kind === 'clock-in' || e.kind === 'clock-out').length;
                 else if (opt.key === 'early')
                   count = activity.filter((e) => e.kind.startsWith('early')).length;
-                else if (opt.key === 'leave')                                 // ⬅️ NEW
+                else if (opt.key === 'leave')
                   count = activity.filter((e) => e.kind.startsWith('leave')).length;
                 else if (opt.key === 'registration')
                   count = activity.filter((e) => e.kind === 'registration').length;
@@ -743,7 +761,7 @@ export default function AdminDashboard() {
         </Col>
 
         <Col xs={24} lg={8}>
-          {/* ⬅️ NEW: Pending Leave Requests side card */}
+          {/* Pending Leave Requests side card */}
           {pendingLeaveCount > 0 && (
             <Card
               title={
@@ -947,7 +965,6 @@ export default function AdminDashboard() {
                   Manage Employees
                 </Button>
               </Link>
-              {/* ⬅️ CHANGED: badge-aware leave button */}
               <Link to="/leave-requests/admin">
                 <Button
                   block
