@@ -40,6 +40,7 @@ const FEED_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'clock', label: 'Clock' },
   { key: 'early', label: 'Early leaves' },
+  { key: 'leave', label: 'Leave' },              // ⬅️ NEW
   { key: 'registration', label: 'Registrations' },
   { key: 'guest', label: 'Guests' },
 ];
@@ -60,21 +61,27 @@ export default function AdminDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [feedFilter, setFeedFilter] = useState('all');
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
+  const [pendingLeaveRequests, setPendingLeaveRequests] = useState([]); // ⬅️ NEW
 
   const load = useCallback(async (dateKey) => {
     setLoading(true);
     try {
-      const [statsRes, settingsRes, earlyRes, activityRes, guestStatsRes, needsReviewRes] =
-        await Promise.all([
-          api.get('/attendance/stats'),
-          api.get('/settings'),
-          api.get('/attendance/early-leave/all', { params: { status: 'pending' } }),
-          api.get('/attendance/activity-feed', {
-            params: { from: dateKey, to: dateKey, limit: 150 },
-          }),
-          api.get('/guests/stats'),
-          api.get('/attendance/needs-review'),
-        ]);
+      // ⬅️ CHANGED: added leaveRes to the Promise.all
+      const [
+        statsRes, settingsRes, earlyRes, activityRes, guestStatsRes, needsReviewRes,
+        leaveRes,
+      ] = await Promise.all([
+        api.get('/attendance/stats'),
+        api.get('/settings'),
+        api.get('/attendance/early-leave/all', { params: { status: 'pending' } }),
+        api.get('/attendance/activity-feed', {
+          params: { from: dateKey, to: dateKey, limit: 150 },
+        }),
+        api.get('/guests/stats'),
+        api.get('/attendance/needs-review'),
+        // ⬅️ NEW: pending leave requests
+        api.get('/leave-requests', { params: { status: 'pending' } }),
+      ]);
 
       setStats(statsRes.data);
       setSettings(settingsRes.data);
@@ -82,6 +89,13 @@ export default function AdminDashboard() {
       setActivity(activityRes.data || []);
       setGuestStats(guestStatsRes.data || { total: 0, today: 0, week: 0 });
       setNeedsReviewCount((needsReviewRes.data || []).length);
+      // ⬅️ NEW
+      const leaveData = leaveRes.data;
+      setPendingLeaveRequests(
+        Array.isArray(leaveData)
+          ? leaveData
+          : (leaveData?.requests || leaveData?.data || [])
+      );
       setLastUpdated(new Date());
     } catch (err) {
       message.error(err.response?.data?.message || 'Failed to load dashboard');
@@ -118,6 +132,9 @@ export default function AdminDashboard() {
       );
     } else if (feedFilter === 'early') {
       filtered = activity.filter((e) => e.kind.startsWith('early'));
+    } else if (feedFilter === 'leave') {
+      // ⬅️ NEW
+      filtered = activity.filter((e) => e.kind.startsWith('leave'));
     } else if (feedFilter === 'registration') {
       filtered = activity.filter((e) => e.kind === 'registration');
     } else if (feedFilter === 'guest') {
@@ -128,6 +145,17 @@ export default function AdminDashboard() {
 
   const pendingCount = earlyRequests.length;
   const guestTodayCount = guestStats.today;
+  const pendingLeaveCount = pendingLeaveRequests.length; // ⬅️ NEW
+
+  // ⬅️ NEW: normalise whichever shape the backend returns
+  const leaveDisplayName = (r) =>
+    r.full_name || r.employee?.full_name || r.employee_name || 'Unknown';
+  const leaveDisplayCode = (r) =>
+    r.employee_code || r.employee?.employee_code || '';
+  const leaveType = (r) =>
+    r.leave_type || r.type || r.leaveType || 'Leave';
+  const leaveStart = (r) => r.start_date || r.from_date || r.from || '';
+  const leaveEnd = (r) => r.end_date || r.to_date || r.to || '';
 
   const renderActivityItem = (ev) => {
     const time = ev.at
@@ -164,6 +192,9 @@ export default function AdminDashboard() {
           return <div style={{ ...baseStyle, background: '#ecfdf5', color: '#16a34a' }}><CheckOutlined /></div>;
         case 'early-rejected':
           return <div style={{ ...baseStyle, background: '#fef2f2', color: '#dc2626' }}><CloseOutlined /></div>;
+        // ⬅️ NEW: leave-request icon
+        case 'leave-request':
+          return <div style={{ ...baseStyle, background: '#eef2ff', color: '#4f46e5' }}><CalendarOutlined /></div>;
         case 'registration':
           return <div style={{ ...baseStyle, background: '#eff6ff', color: '#1677ff' }}><UserAddOutlined /></div>;
         case 'guest-checkin':
@@ -302,6 +333,26 @@ export default function AdminDashboard() {
             </>
           );
 
+        // ⬅️ NEW: activity feed renderer for leave requests
+        case 'leave-request':
+          return (
+            <>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
+                <strong>{name}</strong> requested {ev.meta?.leave_type || 'leave'}
+                <Tag color="blue" style={{ marginLeft: 4, fontSize: 10 }}>Pending</Tag>
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                {ev.meta?.start_date} → {ev.meta?.end_date}
+                {ev.employee?.employee_code ? ` · ${ev.employee.employee_code}` : ''}
+              </div>
+              {ev.meta?.reason && (
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, fontStyle: 'italic' }}>
+                  "{ev.meta.reason}"
+                </div>
+              )}
+            </>
+          );
+
         case 'registration':
           return (
             <>
@@ -389,6 +440,29 @@ export default function AdminDashboard() {
         </Space>
       </div>
 
+      {/* ⬅️ NEW: Leave request alert banner */}
+      {pendingLeaveCount > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<CalendarOutlined />}
+          style={{ marginBottom: 16 }}
+          message={
+            <Text strong>
+              {pendingLeaveCount} leave request{pendingLeaveCount === 1 ? '' : 's'} awaiting your approval
+            </Text>
+          }
+          description="Employees have submitted time-off requests and are waiting for a decision."
+          action={
+            <Link to="/leave-requests/admin">
+              <Button type="primary" size="small" icon={<ArrowRightOutlined />}>
+                Review now
+              </Button>
+            </Link>
+          }
+        />
+      )}
+
       {pendingCount > 0 && (
         <Alert
           type="warning"
@@ -433,10 +507,7 @@ export default function AdminDashboard() {
         />
       )}
 
-      {/* ═══════════════ STAT CARDS ═══════════════
-          Cleaner layout: 5 cards on desktop,
-          2×2 on tablet, stacked on phone.
-          Guest count is folded into the "Present Today" card's subtitle. */}
+      {/* ═══════════════ STAT CARDS ═══════════════ */}
       <Row gutter={[16, 16]} className="mb-6">
         <Col xs={12} md={8}>
           <Card bordered={false} className="shadow-sm" style={{ height: '100%' }}>
@@ -515,9 +586,33 @@ export default function AdminDashboard() {
             </Text>
           </Card>
         </Col>
+
+        {/* ⬅️ NEW: Pending Leave Requests stat card */}
+        <Col xs={12} md={8}>
+          <Card
+            bordered={false}
+            className="shadow-sm"
+            style={{
+              height: '100%',
+              ...(pendingLeaveCount > 0
+                ? { border: '1px solid #4f46e5', background: '#eef2ff' }
+                : {}),
+            }}
+          >
+            <Statistic
+              title="Pending Leave Requests"
+              value={pendingLeaveCount}
+              prefix={<CalendarOutlined style={{ color: '#4f46e5' }} />}
+              valueStyle={{ color: pendingLeaveCount > 0 ? '#4f46e5' : '#94a3b8' }}
+            />
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
+              Awaiting your approval
+            </Text>
+          </Card>
+        </Col>
       </Row>
 
-      {/* ── Reports button — sits right under the stat cards ── */}
+      {/* ── Reports button ── */}
       <div
         style={{
           display: 'flex',
@@ -547,9 +642,7 @@ export default function AdminDashboard() {
       </div>
 
       <Row gutter={[16, 16]}>
-        {/* ═══════════════ RECENT ACTIVITIES ═══════════════
-            Latest 5 events, filterable by type.
-            Guests appear here alongside employee actions. */}
+        {/* ═══════════════ RECENT ACTIVITIES ═══════════════ */}
         <Col xs={24} lg={16}>
           <Card
             title={
@@ -592,6 +685,8 @@ export default function AdminDashboard() {
                   count = activity.filter((e) => e.kind === 'clock-in' || e.kind === 'clock-out').length;
                 else if (opt.key === 'early')
                   count = activity.filter((e) => e.kind.startsWith('early')).length;
+                else if (opt.key === 'leave')                                 // ⬅️ NEW
+                  count = activity.filter((e) => e.kind.startsWith('leave')).length;
                 else if (opt.key === 'registration')
                   count = activity.filter((e) => e.kind === 'registration').length;
                 else if (opt.key === 'guest')
@@ -648,6 +743,86 @@ export default function AdminDashboard() {
         </Col>
 
         <Col xs={24} lg={8}>
+          {/* ⬅️ NEW: Pending Leave Requests side card */}
+          {pendingLeaveCount > 0 && (
+            <Card
+              title={
+                <Space>
+                  <CalendarOutlined style={{ color: '#4f46e5' }} />
+                  <span>Pending Leave Requests</span>
+                  <Badge count={pendingLeaveCount} style={{ backgroundColor: '#4f46e5' }} />
+                </Space>
+              }
+              bordered={false}
+              className="shadow-sm mb-4"
+              extra={
+                <Link to="/leave-requests/admin" style={{ fontSize: 13 }}>
+                  View all
+                </Link>
+              }
+            >
+              <List
+                size="small"
+                dataSource={pendingLeaveRequests.slice(0, 3)}
+                renderItem={(r) => (
+                  <List.Item
+                    style={{ paddingLeft: 0, paddingRight: 0 }}
+                    actions={[
+                      <Link key="review" to="/leave-requests/admin" style={{ fontSize: 12 }}>
+                        Review
+                      </Link>,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      title={
+                        <span className="font-medium">
+                          {leaveDisplayName(r)}{' '}
+                          {leaveDisplayCode(r) && (
+                            <Text type="secondary" style={{ fontSize: 11 }}>
+                              ({leaveDisplayCode(r)})
+                            </Text>
+                          )}
+                        </span>
+                      }
+                      description={
+                        <div>
+                          <div className="text-xs text-gray-600">
+                            <Text strong>{leaveType(r)}</Text> ·{' '}
+                            {leaveStart(r)} → {leaveEnd(r)}
+                          </div>
+                          {r.reason && (
+                            <div
+                              className="text-xs text-gray-500 mt-1"
+                              style={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                display: '-webkit-box',
+                                WebkitLineClamp: 1,
+                                WebkitBoxOrient: 'vertical',
+                              }}
+                            >
+                              "{r.reason}"
+                            </div>
+                          )}
+                        </div>
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+              {pendingLeaveCount > 3 && (
+                <>
+                  <Divider style={{ margin: '8px 0' }} />
+                  <Link to="/leave-requests/admin">
+                    <Button block type="link" size="small">
+                      +{pendingLeaveCount - 3} more
+                    </Button>
+                  </Link>
+                </>
+              )}
+            </Card>
+          )}
+
           {pendingCount > 0 && (
             <Card
               title={
@@ -762,7 +937,7 @@ export default function AdminDashboard() {
                 Edit Settings
               </Button>
             </Link>
-          </Card>  
+          </Card>
 
           {/* Quick Actions */}
           <Card title="Quick Actions" bordered={false} className="shadow-sm">
@@ -772,9 +947,20 @@ export default function AdminDashboard() {
                   Manage Employees
                 </Button>
               </Link>
+              {/* ⬅️ CHANGED: badge-aware leave button */}
               <Link to="/leave-requests/admin">
-                <Button block icon={<CalendarOutlined />}>
+                <Button
+                  block
+                  icon={<CalendarOutlined />}
+                  danger={pendingLeaveCount > 0}
+                >
                   Leave Requests
+                  {pendingLeaveCount > 0 && (
+                    <Badge
+                      count={pendingLeaveCount}
+                      style={{ marginLeft: 6, backgroundColor: '#4f46e5' }}
+                    />
+                  )}
                 </Button>
               </Link>
               <Link to="/early-leave">
