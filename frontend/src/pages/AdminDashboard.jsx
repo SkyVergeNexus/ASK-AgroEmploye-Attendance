@@ -254,8 +254,10 @@ export default function AdminDashboard() {
               <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.4 }}>
                 <strong>{name}</strong>
                 {ev.meta?.admin_resolved
-                  ? ev.meta.status === 'absent' ? ' was marked absent by admin' : ' was confirmed present by admin'
-                  : ev.meta?.auto_clocked_out ? ' was auto clocked out' : ' clocked out'}
+                  ? (ev.meta.status === 'absent'
+                      ? ' was marked absent by admin'
+                      : ' was confirmed present by admin')
+                  : ' clocked out'}
                 {ev.meta?.early && (
                   <> <Tag color="orange" style={{ marginLeft: 4, fontSize: 10 }}>Early</Tag></>
                 )}
@@ -268,9 +270,6 @@ export default function AdminDashboard() {
                 <Tag color="green" style={{ marginTop: 3 }}>
                   Admin review · {ev.meta.status}
                 </Tag>
-              )}
-              {ev.meta?.auto_clocked_out && (
-                <Tag color="blue" style={{ marginTop: 3 }}>Auto clock-out</Tag>
               )}
               {ev.meta?.early_reason && (
                 <div style={{ fontSize: 11, color: '#92400e', marginTop: 3, fontStyle: 'italic' }}>
@@ -933,8 +932,8 @@ export default function AdminDashboard() {
                 <Descriptions.Item label="Work Hours">
                   {settings.work_start} – {settings.work_end}
                 </Descriptions.Item>
-                <Descriptions.Item label="Auto clock-out">
-                  At detected departure after closing
+                <Descriptions.Item label="Clock-out">
+                  Manual (employee clocks out)
                 </Descriptions.Item>
                 <Descriptions.Item label="Late After">
                   {settings.late_threshold_minutes} min

@@ -27,6 +27,10 @@ const BRAND_SOFT = '#ecfdf5';
 const BORDER = '#e5e7eb';
 const CARD = { border: `1px solid ${BORDER}`, borderRadius: 12 };
 
+// Records are flagged for admin review only when the employee never clocked out
+// within this many hours after closing time (enforced by the backend scheduler).
+const REVIEW_AFTER_HOURS = 9;
+
 const STATUS_META = {
   present: { accent: '#16a34a', bg: '#ecfdf5', label: 'Present', color: 'green' },
   late: { accent: '#d97706', bg: '#fffbeb', label: 'Late', color: 'gold' },
@@ -50,6 +54,12 @@ const GUEST_STATUS_META = {
 };
 
 const selectProps = { mode: 'multiple', allowClear: true, maxTagCount: 'responsive', style: { width: '100%' } };
+
+// Fields that can change on a record while its details modal is open.
+const WATCHED_FIELDS = [
+  'clock_out', 'status', 'needs_review', 'review_note',
+  'admin_resolved', 'admin_resolved_by', 'admin_resolved_at', 'admin_resolved_reason',
+];
 
 /* ---------- Helpers ---------- */
 
@@ -75,6 +85,10 @@ function initials(name = '') {
   if (!parts.length) return '?';
   return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }
+
+// A record only counts as awaiting admin action when it was never clocked out,
+// was flagged for review, and has not been resolved yet.
+const isAwaitingReview = (r) => Boolean(r.needs_review) && !r.clock_out && !r.admin_resolved;
 
 // Prefix risky leading characters so spreadsheets do not run user text as a formula.
 const csvSafe = (v) => {
@@ -273,11 +287,7 @@ export default function Reports() {
         if (!current) return current;
         const latest = data.find((record) => record.id === current.id);
         if (!latest) return current;
-        const changed = [
-          'clock_out', 'status', 'auto_clocked_out', 'auto_clock_out_reason',
-          'needs_review', 'review_note', 'after_close_tracking', 'admin_resolved',
-          'admin_resolved_by', 'admin_resolved_at', 'admin_resolved_reason',
-        ].some((key) => latest[key] !== current[key]);
+        const changed = WATCHED_FIELDS.some((key) => latest[key] !== current[key]);
         return changed ? { ...current, ...latest } : current;
       });
     } catch (err) {
@@ -432,8 +442,7 @@ export default function Reports() {
         `attendance_${rangeLabel}.csv`,
         [
           'Date', 'Code', 'Name', 'Gender', 'Department', 'In', 'Out', 'Status',
-          'Mode', 'Record', 'Admin decision', 'Reviewed at', 'Admin reason',
-          'Auto clock-out reason', 'Note',
+          'Mode', 'Record', 'Admin decision', 'Reviewed at', 'Admin reason', 'Note',
         ],
         filteredAttendance.map((r) => [
           String(r.attendance_date).slice(0, 10),
@@ -443,7 +452,6 @@ export default function Reports() {
           r.admin_resolved ? (r.status === 'absent' ? 'Absent' : 'Present') : '',
           r.admin_resolved_at ? dayjs(r.admin_resolved_at).format('YYYY-MM-DD HH:mm:ss') : '',
           r.admin_resolved_reason || '',
-          r.auto_clocked_out ? r.auto_clock_out_reason || 'Departure detected' : '',
           r.notes || '',
         ])
       );
@@ -688,7 +696,6 @@ export default function Reports() {
             </Descriptions.Item>
             <Descriptions.Item label="Record">
               <AttendanceRecordTag record={r} />
-              {!r.admin_resolved && !r.auto_clocked_out && !r.needs_review && 'Employee clock-out'}
             </Descriptions.Item>
             {r.admin_resolved && (
               <>
@@ -702,14 +709,9 @@ export default function Reports() {
                 </Descriptions.Item>
               </>
             )}
-            {r.needs_review && (
+            {isAwaitingReview(r) && (
               <Descriptions.Item label="Review note" span={2}>
-                {r.review_note || 'Presence could not be verified at closing'}
-              </Descriptions.Item>
-            )}
-            {r.auto_clocked_out && (
-              <Descriptions.Item label="Auto clock-out detail" span={2}>
-                {r.auto_clock_out_reason || 'Departure was detected after closing'}
+                {r.review_note || `No clock-out recorded ${REVIEW_AFTER_HOURS} hours after closing time`}
               </Descriptions.Item>
             )}
             <Descriptions.Item label="Department" span={2}>
