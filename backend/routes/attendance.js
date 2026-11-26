@@ -4,7 +4,7 @@ const { verifyToken, isAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { persistUpload } = require('../helpers/imageStorage');
 const { nearestLocality } = require('../helpers/reverseGeocode');
-const { notifyAdmins, notifyUser } = require('../helpers/notifications');
+const { notify } = require('../helpers/notifications');
 const {
   determinePresence,
   HEARTBEAT_INTERVAL_MS,
@@ -402,19 +402,15 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 
     logger(`clock-in user=${req.user.id} mode=${mode} method=${method} status=${status}`);
 
-    // Notifications must never make a successful clock-in look like a failure
-    // (email delivery has been timing out on the server).
-    try {
-      const employeeName = req.user.full_name || `Employee #${req.user.id}`;
-      await notifyAdmins({
-        type: 'attendance_clock_in',
-        title: 'Employee clocked in',
-        message: `${employeeName} clocked in ${mode === 'remote' ? 'remotely' : 'on-site'} (${status}).`,
-        targetPath: '/reports',
-      });
-    } catch (notifyErr) {
-      console.warn('[attendance] clock-in notification failed:', notifyErr.message);
-    }
+    // notify() never throws, so a notification problem cannot make a
+    // successful clock-in look like a failure. The name is looked up from the
+    // database using actorId.
+    await notify('attendance_clock_in', {
+      recipients: 'admins',
+      actorId: req.user.id,
+      data: { mode, status },
+      targetPath: '/reports',
+    });
 
     res.json({
       message: 'Clocked in',
@@ -434,6 +430,9 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 
 // ============================================================
 //  CLOCK OUT  (on-site requires GPS + Wi-Fi when enforced)
+//  Only today's record can be clocked out by the employee. A record
+//  left open is flagged for admin review by the scheduler 9 hours
+//  after closing time (see jobs/scheduler.js).
 // ============================================================
 router.post('/clock-out', verifyToken, async (req, res) => {
   const today = localDateString();
@@ -537,8 +536,7 @@ router.post('/clock-out', verifyToken, async (req, res) => {
 
     // presence_state is NOT NULL, so reset it to 'unknown' instead of NULL.
     // needs_review is cleared here too: a successful manual clock-out means the
-    // record is complete, so any stale review flag (from any prior system) is
-    // no longer valid.
+    // record is complete, so any stale review flag is no longer valid.
     const [result] = await pool.query(
       `UPDATE attendance
        SET clock_out = ?,
@@ -564,17 +562,12 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     }
 
     logger(`clock-out user=${req.user.id} remote=${isRemote} early=${isEarly}`);
-    try {
-      const employeeName = req.user.full_name || `Employee #${req.user.id}`;
-      await notifyAdmins({
-        type: 'attendance_clock_out',
-        title: 'Employee clocked out',
-        message: `${employeeName} clocked out${isEarly ? ' early' : ''}.`,
-        targetPath: '/reports',
-      });
-    } catch (notifyErr) {
-      console.warn('[attendance] clock-out notification failed:', notifyErr.message);
-    }
+    await notify('attendance_clock_out', {
+      recipients: 'admins',
+      actorId: req.user.id,
+      data: { early: isEarly },
+      targetPath: '/reports',
+    });
     res.json({ message: 'Clocked out' });
   } catch (err) {
     serverError(res, err, 'clock-out');
@@ -613,11 +606,11 @@ router.get('/today', verifyToken, async (req, res) => {
 //  PRESENCE TRACKING
 //  - Used while on-site. After work_end, employees still inside
 //    keep being tracked until they step outside (recorded as a
-//    presence event only — NOT an auto clock-out).
-//  - If they never clock out, the record simply stays open. Admins
-//    can resolve it manually via /needs-review (see the admin
-//    section below), or the employee can clock out themselves at
-//    any later time and the actual clock-out time is recorded.
+//    presence event only, never an automatic clock-out).
+//  - If they never clock out, the record stays open. 9 hours after
+//    closing time the scheduler flags it for admin review, and an
+//    admin resolves it via /needs-review.
+//  - Rows without a clock_in (absent or leave rows) are never tracked.
 // ============================================================
 router.get('/presence/active', verifyToken, async (req, res) => {
   try {
@@ -630,6 +623,7 @@ router.get('/presence/active', verifyToken, async (req, res) => {
          FROM attendance
          WHERE employee_id = ?
            AND attendance_date BETWEEN ? AND ?
+           AND clock_in IS NOT NULL
            AND clock_out IS NULL
            AND needs_review = 0
            AND COALESCE(clock_in_mode, 'onsite') = 'onsite'
@@ -711,6 +705,7 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
          FROM attendance
          WHERE employee_id = ?
            AND attendance_date BETWEEN ? AND ?
+           AND clock_in IS NOT NULL
            AND clock_out IS NULL
            AND needs_review = 0
            AND COALESCE(clock_in_mode, 'onsite') = 'onsite'
@@ -896,23 +891,15 @@ router.post('/early-leave/request', verifyToken, async (req, res) => {
     );
 
     logger(`early-leave request user=${req.user.id}`);
-    try {
-      const employeeName = req.user.full_name || `Employee #${req.user.id}`;
-      await notifyUser(req.user.id, {
-        type: 'early_leave_request_received',
-        title: 'Early-leave request received',
-        message: 'Your early-leave request was submitted and is waiting for admin review.',
-        targetPath: '/leave-requests',
-      });
-      await notifyAdmins({
-        type: 'early_leave_request',
-        title: 'Early-leave request submitted',
-        message: `${employeeName} requested to leave early today.`,
-        targetPath: '/early-leave',
-      });
-    } catch (notifyErr) {
-      console.warn('[attendance] early-leave notification failed:', notifyErr.message);
-    }
+    await notify('early_leave_request_received', {
+      recipients: req.user.id,
+      targetPath: '/leave-requests',
+    });
+    await notify('early_leave_request', {
+      recipients: 'admins',
+      actorId: req.user.id,
+      targetPath: '/early-leave',
+    });
     res.status(201).json({ message: 'Request submitted. Awaiting admin approval.' });
   } catch (err) {
     serverError(res, err, 'early-leave request');
@@ -983,22 +970,29 @@ router.put('/early-leave/:id/decide', verifyToken, isAdmin, async (req, res) => 
       [req.params.id]
     );
     if (requestRows.length) {
-      try {
-        await notifyUser(requestRows[0].employee_id, {
-          type: 'early_leave_decision',
-          title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
-          message: `Your early-leave request was ${approve ? 'approved' : 'rejected'}.${admin_note ? ` Admin note: ${String(admin_note).trim()}` : ''}`,
-          targetPath: '/leave-requests',
-        });
-        await notifyAdmins({
-          type: 'early_leave_decision',
-          title: `Early-leave request ${approve ? 'approved' : 'rejected'}`,
-          message: `Employee #${requestRows[0].employee_id}'s early-leave request was ${approve ? 'approved' : 'rejected'}.`,
-          targetPath: '/early-leave',
-        });
-      } catch (notifyErr) {
-        console.warn('[attendance] early-leave decision notification failed:', notifyErr.message);
-      }
+      const requesterId = requestRows[0].employee_id;
+      const decision = {
+        approved: !!approve,
+        adminNote: admin_note ? String(admin_note).trim() : '',
+      };
+
+      // To the employee who asked.
+      await notify('early_leave_decision', {
+        recipients: requesterId,
+        data: decision,
+        targetPath: '/leave-requests',
+      });
+      // To the other admins; the requester is the subject, the deciding admin is named.
+      const [deciderRows] = await pool.query(
+        'SELECT full_name FROM employees WHERE id = ?',
+        [req.user.id]
+      );
+      await notify('early_leave_decision', {
+        recipients: 'admins',
+        actorId: requesterId,
+        data: { ...decision, decidedByName: deciderRows[0]?.full_name || null },
+        targetPath: '/early-leave',
+      });
     }
     res.json({ message: approve ? 'Approved' : 'Rejected' });
   } catch (err) {
@@ -1312,12 +1306,11 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
 
 // ============================================================
 //  ADMIN REVIEW — flagged records
-//  A record is flagged when needs_review = 1 AND admin_resolved = 0
-//  AND clock_out IS NULL. With the auto-clock-out system removed,
-//  a record is only flagged when an admin explicitly flags it (or
-//  by any future rule you decide to add). A successful manual
-//  clock-out clears needs_review, so completed records never
-//  appear in this queue.
+//  A record is flagged (needs_review = 1) by the scheduler when the
+//  employee never clocked out within 9 hours after closing time.
+//  It stays in this queue while admin_resolved = 0 and clock_out IS
+//  NULL. A successful manual clock-out clears needs_review, so
+//  completed records never appear here.
 // ============================================================
 router.get('/needs-review', verifyToken, isAdmin, async (req, res) => {
   try {
@@ -1391,19 +1384,11 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
       return res.status(400).json({ message: 'This attendance record has already been resolved' });
     }
 
-    try {
-      await notifyUser(r.employee_id, {
-        type: 'attendance_admin_decision',
-        title: decision === 'present' ? 'Your day was marked Present' : 'Your day was marked Absent',
-        message:
-          decision === 'present'
-            ? `Admin has reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as present.`
-            : `Admin reviewed your missed clock-out on ${r.attendance_date_key} and recorded you as absent.`,
-        targetPath: '/dashboard',
-      });
-    } catch (notifyErr) {
-      console.warn('[attendance] review notification failed:', notifyErr.message);
-    }
+    await notify('attendance_admin_decision', {
+      recipients: r.employee_id,
+      data: { decision, date: r.attendance_date_key },
+      targetPath: '/dashboard',
+    });
 
     res.json({ message: 'Resolved', status: newStatus });
   } catch (err) {

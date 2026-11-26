@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, Avatar, Button, Card, Col, Empty, List, Pagination, Row, Space,
+  Alert, Avatar, Button, Card, Col, Empty, List, Pagination, Row, Segmented, Space,
   Statistic, Tag, Tooltip, Typography, message,
 } from 'antd';
 import {
@@ -8,10 +8,14 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
-import { formatRelativeTime, getNotificationMeta } from '../components/notificationUtils.jsx';
+import { assetUrl } from '../config';
+import {
+  CATEGORY_TABS, avatarColor, formatRelativeTime, getCategoryMeta, initials,
+} from '../components/notificationUtils.jsx';
 
 const { Text, Title } = Typography;
 const PAGE_SIZE = 15;
+const BRAND = '#047857';
 
 function formatExactTime(value) {
   if (!value) return '';
@@ -25,6 +29,7 @@ export default function Notifications() {
   const [filteredCount, setFilteredCount] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
   const [filter, setFilter] = useState('all');
+  const [category, setCategory] = useState('all');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [markingAll, setMarkingAll] = useState(false);
@@ -41,6 +46,7 @@ export default function Notifications() {
           limit: PAGE_SIZE,
           offset: (page - 1) * PAGE_SIZE,
           unread: filter === 'unread' ? 'true' : undefined,
+          category: category === 'all' ? undefined : category,
         },
       });
       setItems(data.items || []);
@@ -52,7 +58,7 @@ export default function Notifications() {
     } finally {
       setLoading(false);
     }
-  }, [filter, page]);
+  }, [filter, category, page]);
 
   useEffect(() => {
     const timer = window.setTimeout(loadNotifications, 0);
@@ -91,11 +97,8 @@ export default function Notifications() {
     try {
       await api.put('/notifications/read-all');
       message.success('All notifications marked as read.');
-      if (page !== 1) {
-        setPage(1);
-      } else {
-        await loadNotifications();
-      }
+      if (page !== 1) setPage(1);
+      else await loadNotifications();
     } catch (error) {
       message.error(error.response?.data?.message || 'Unable to mark notifications as read.');
     } finally {
@@ -103,70 +106,43 @@ export default function Notifications() {
     }
   };
 
-  const setActiveFilter = (nextFilter) => {
-    if (filter === nextFilter) return;
-    setFilter(nextFilter);
-    setPage(1);
-  };
+  const changeFilter = (next) => { setFilter(next); setPage(1); };
+  const changeCategory = (next) => { setCategory(next); setPage(1); };
 
   const readCount = Math.max(0, totalCount - unreadCount);
   const firstItem = filteredCount ? (page - 1) * PAGE_SIZE + 1 : 0;
   const lastItem = Math.min(page * PAGE_SIZE, filteredCount);
+  const filtersActive = filter !== 'all' || category !== 'all';
 
   return (
     <div style={{ maxWidth: 1120, margin: '0 auto', paddingBottom: 28 }}>
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 20,
-          flexWrap: 'wrap',
-          marginBottom: 24,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 20, flexWrap: 'wrap', marginBottom: 24,
         }}
       >
         <Space align="start" size={16}>
           <Avatar
-            shape="square"
-            size={52}
-            icon={<BellOutlined />}
+            shape="square" size={52} icon={<BellOutlined />}
             style={{
-              background: '#ecfdf5',
-              color: '#047857',
-              border: '1px solid #d1fae5',
-              borderRadius: 14,
-              fontSize: 22,
+              background: '#ecfdf5', color: BRAND, border: '1px solid #d1fae5',
+              borderRadius: 14, fontSize: 22,
             }}
           />
           <div>
-            <Text
-              style={{
-                color: '#047857',
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: '0.12em',
-                textTransform: 'uppercase',
-              }}
-            >
+            <Text style={{ color: BRAND, fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
               Your inbox
             </Text>
-            <Title level={2} style={{ margin: '2px 0 3px', color: '#102a22' }}>
-              Notifications
-            </Title>
+            <Title level={2} style={{ margin: '2px 0 3px', color: '#102a22' }}>Notifications</Title>
             <Text type="secondary">Important updates about your account and workplace.</Text>
           </div>
         </Space>
         <Space wrap>
-          <Button icon={<ReloadOutlined />} onClick={loadNotifications} loading={loading}>
-            Refresh
-          </Button>
+          <Button icon={<ReloadOutlined />} onClick={loadNotifications} loading={loading}>Refresh</Button>
           <Button
-            type="primary"
-            icon={<CheckOutlined />}
-            onClick={markAllRead}
-            disabled={!unreadCount}
-            loading={markingAll}
-            style={{ background: '#047857' }}
+            type="primary" icon={<CheckOutlined />} onClick={markAllRead}
+            disabled={!unreadCount} loading={markingAll} style={{ background: BRAND }}
           >
             Mark all as read
           </Button>
@@ -175,14 +151,13 @@ export default function Notifications() {
 
       <Row gutter={[14, 14]} style={{ marginBottom: 22 }}>
         {[
-          { title: 'All notifications', value: totalCount, color: '#047857', icon: <BellOutlined /> },
+          { title: 'All notifications', value: totalCount, color: BRAND, icon: <BellOutlined /> },
           { title: 'Unread', value: unreadCount, color: '#b45309', icon: <MailOutlined /> },
           { title: 'Read', value: readCount, color: '#475569', icon: <CheckOutlined /> },
         ].map((stat) => (
           <Col key={stat.title} xs={24} sm={8}>
             <Card
-              size="small"
-              style={{ height: '100%', borderColor: '#e5eee9', borderRadius: 12 }}
+              size="small" style={{ height: '100%', borderColor: '#e5eee9', borderRadius: 12 }}
               styles={{ body: { padding: '16px 18px' } }}
             >
               <Statistic
@@ -196,19 +171,11 @@ export default function Notifications() {
         ))}
       </Row>
 
-      <Card
-        styles={{ body: { padding: 0 } }}
-        style={{ borderColor: '#e5eee9', borderRadius: 14, overflow: 'hidden' }}
-      >
+      <Card styles={{ body: { padding: 0 } }} style={{ borderColor: '#e5eee9', borderRadius: 14, overflow: 'hidden' }}>
         <div
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 16,
-            flexWrap: 'wrap',
-            padding: '16px 20px',
-            borderBottom: '1px solid #edf2ef',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 16, flexWrap: 'wrap', padding: '16px 20px', borderBottom: '1px solid #edf2ef',
           }}
         >
           <div>
@@ -219,29 +186,26 @@ export default function Notifications() {
               </Text>
             </div>
           </div>
-          <Space size={6}>
-            <Button
-              type={filter === 'all' ? 'primary' : 'text'}
-              onClick={() => setActiveFilter('all')}
-              style={filter === 'all' ? { background: '#047857' } : undefined}
-            >
-              All
-            </Button>
-            <Button
-              type={filter === 'unread' ? 'primary' : 'text'}
-              onClick={() => setActiveFilter('unread')}
-              style={filter === 'unread' ? { background: '#047857' } : undefined}
-            >
-              Unread{unreadCount > 0 ? ` (${unreadCount})` : ''}
-            </Button>
+          <Space size={12} wrap>
+            <Segmented
+              value={category}
+              onChange={changeCategory}
+              options={CATEGORY_TABS.map((t) => ({ label: t.label, value: t.key }))}
+            />
+            <Segmented
+              value={filter}
+              onChange={changeFilter}
+              options={[
+                { label: 'All', value: 'all' },
+                { label: unreadCount > 0 ? `Unread (${unreadCount})` : 'Unread', value: 'unread' },
+              ]}
+            />
           </Space>
         </div>
 
         {loadError && (
           <Alert
-            type="error"
-            showIcon
-            message={loadError}
+            type="error" showIcon message={loadError}
             action={<Button size="small" onClick={loadNotifications}>Try again</Button>}
             style={{ margin: 16 }}
           />
@@ -254,14 +218,15 @@ export default function Notifications() {
             emptyText: (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={filter === 'unread' ? 'You have no unread notifications.' : 'No notifications yet.'}
+                description={filtersActive ? 'Nothing matches these filters.' : 'No notifications yet.'}
                 style={{ padding: '34px 12px' }}
               />
             ),
           }}
           renderItem={(item) => {
-            const meta = getNotificationMeta(item.event_type, item.title, item.message);
-            const actionable = Boolean(item.target_path || !item.read_at);
+            const meta = getCategoryMeta(item.category);
+            const unread = !item.read_at;
+            const actionable = Boolean(item.target_path || unread);
             return (
               <List.Item
                 onClick={actionable ? () => openNotification(item) : undefined}
@@ -276,29 +241,48 @@ export default function Notifications() {
                 style={{
                   padding: '18px 20px',
                   cursor: actionable ? 'pointer' : 'default',
-                  background: item.read_at ? '#fff' : '#f5fbf7',
+                  background: unread ? '#f5fbf7' : '#fff',
                   transition: 'background 150ms ease',
                 }}
               >
                 <List.Item.Meta
                   avatar={
-                    <Avatar
-                      shape="square"
-                      size={42}
-                      icon={meta.icon}
-                      style={{
-                        background: meta.background,
-                        color: meta.color,
-                        border: `1px solid ${meta.color}22`,
-                        borderRadius: 12,
-                        fontSize: 17,
-                      }}
-                    />
+                    <span style={{ position: 'relative', display: 'inline-block', width: 44, height: 44 }}>
+                      {item.actor_name ? (
+                        <Avatar
+                          size={44}
+                          src={item.actor_picture ? assetUrl(item.actor_picture) : undefined}
+                          style={{ background: avatarColor(item.actor_name), fontWeight: 600 }}
+                        >
+                          {initials(item.actor_name)}
+                        </Avatar>
+                      ) : (
+                        <Avatar
+                          size={44} icon={meta.icon}
+                          style={{ background: meta.background, color: meta.color, fontSize: 18 }}
+                        />
+                      )}
+                      {item.actor_name && (
+                        <span
+                          style={{
+                            position: 'absolute', right: -3, bottom: -3, width: 20, height: 20,
+                            borderRadius: '50%', background: meta.background, color: meta.color,
+                            border: '2px solid #fff', fontSize: 10,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}
+                        >
+                          {meta.icon}
+                        </span>
+                      )}
+                    </span>
                   }
                   title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <Text strong={!item.read_at} style={{ color: '#172b24' }}>{item.title}</Text>
-                      {!item.read_at && <Tag color="green" style={{ marginInlineEnd: 0 }}>New</Tag>}
+                      <Text strong={unread} style={{ color: '#172b24' }}>{item.title}</Text>
+                      {unread && <Tag color="green" style={{ marginInlineEnd: 0 }}>New</Tag>}
+                      {unread && item.priority === 'high' && (
+                        <Tag color="orange" bordered={false} style={{ marginInlineEnd: 0 }}>Action needed</Tag>
+                      )}
                     </div>
                   }
                   description={
@@ -311,9 +295,7 @@ export default function Notifications() {
                       <Space size={6}>
                         <ClockCircleOutlined style={{ fontSize: 11 }} />
                         <Tooltip title={formatExactTime(item.created_at)}>
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            {formatRelativeTime(item.created_at)}
-                          </Text>
+                          <Text type="secondary" style={{ fontSize: 12 }}>{formatRelativeTime(item.created_at)}</Text>
                         </Tooltip>
                         <Tag bordered={false} style={{ marginInlineStart: 4, color: meta.color, background: meta.background }}>
                           {meta.label}
@@ -322,18 +304,15 @@ export default function Notifications() {
                     </div>
                   }
                 />
-                {!item.read_at && (
+                {unread && (
                   <Tooltip title="Mark as read">
                     <Button
                       type="text"
                       aria-label={`Mark ${item.title} as read`}
                       icon={<CheckOutlined />}
                       loading={busyId === item.id}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        markRead(item);
-                      }}
-                      style={{ color: '#047857' }}
+                      onClick={(event) => { event.stopPropagation(); markRead(item); }}
+                      style={{ color: BRAND }}
                     />
                   </Tooltip>
                 )}
@@ -345,11 +324,8 @@ export default function Notifications() {
         {filteredCount > PAGE_SIZE && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '14px 20px', borderTop: '1px solid #edf2ef' }}>
             <Pagination
-              current={page}
-              pageSize={PAGE_SIZE}
-              total={filteredCount}
-              onChange={setPage}
-              showSizeChanger={false}
+              current={page} pageSize={PAGE_SIZE} total={filteredCount}
+              onChange={setPage} showSizeChanger={false}
               showTotal={(total, range) => `${range[0]}–${range[1]} of ${total}`}
               size="small"
             />
