@@ -2,7 +2,14 @@
 const pool = require('../config/db');
 const { notifyAdmins } = require('../helpers/notifications');
 
+// A record with no clock-out is sent to admin review this many hours after closing time.
 const REVIEW_AFTER_HOURS = 9;
+
+// Days of the week the office works (0 = Sunday ... 6 = Saturday). Adjust if you work Saturdays.
+const WORKING_DAYS = [1, 2, 3, 4, 5];
+
+// Admin accounts are not tracked for attendance. Set to false if admins also clock in.
+const EXCLUDE_ADMINS = true;
 
 function localDateString(d = new Date()) {
   const y = d.getFullYear();
@@ -20,9 +27,20 @@ function localDateTimeString(d) {
   return `${localDateString(d)} ${time}`;
 }
 
-let lastRetentionDate = null;
+function todayAt(timeString, fallback) {
+  const src = String(timeString || fallback || '00:00:00');
+  const [h, m] = src.split(':');
+  const d = new Date();
+  d.setHours(Number(h) || 0, Number(m) || 0, 0, 0);
+  return d;
+}
 
-// Flag records that were never clocked out, 9h after closing time.
+let lastRetentionDate = null;
+let lastAbsenteeDate = null;
+
+// ------------------------------------------------------------
+//  1. Never clocked out: flag for admin review 9h after closing
+// ------------------------------------------------------------
 async function flagMissedClockOuts() {
   const nowStr = localDateTimeString(new Date());
 
@@ -63,6 +81,56 @@ async function flagMissedClockOuts() {
   }
 }
 
+// ------------------------------------------------------------
+//  2. Never clocked in: mark absent once closing time has passed
+//  Employees on approved leave already have a 'leave' row for the
+//  day, so the NOT EXISTS check below skips them automatically.
+// ------------------------------------------------------------
+async function markAbsentees() {
+  const now = new Date();
+  const today = localDateString(now);
+
+  if (lastAbsenteeDate === today) return;           // already done today
+  if (!WORKING_DAYS.includes(now.getDay())) return; // not a working day
+
+  const [settingsRows] = await pool.query('SELECT work_end FROM settings WHERE id = 1');
+  const workEnd = todayAt(settingsRows[0]?.work_end, '17:00:00');
+
+  // Clock-in stays open until workEnd inclusive, so only act strictly after it.
+  if (now <= workEnd) return;
+
+  const [result] = await pool.query(
+    `INSERT INTO attendance (employee_id, attendance_date, status, presence_state)
+     SELECT e.id, ?, 'absent', 'unknown'
+     FROM employees e
+     WHERE e.is_active = 1
+       AND e.is_approved = 1
+       ${EXCLUDE_ADMINS ? "AND COALESCE(e.system_role, '') <> 'admin'" : ''}
+       AND DATE(e.created_at) < ?
+       AND NOT EXISTS (
+         SELECT 1 FROM attendance a
+         WHERE a.employee_id = e.id AND a.attendance_date = ?
+       )`,
+    [today, today, today]
+  );
+
+  lastAbsenteeDate = today;
+
+  if (result.affectedRows > 0) {
+    console.log(`[scheduler] marked ${result.affectedRows} employee(s) absent for ${today}`);
+    try {
+      await notifyAdmins({
+        type: 'attendance_absent_marked',
+        title: 'Absentees recorded',
+        message: `${result.affectedRows} employee(s) did not clock in today and were marked absent.`,
+        targetPath: '/reports',
+      });
+    } catch (e) {
+      console.warn('[scheduler] absentee notification failed:', e.message);
+    }
+  }
+}
+
 async function tick() {
   try {
     const today = localDateString();
@@ -75,9 +143,16 @@ async function tick() {
       );
       lastRetentionDate = today;
     }
-    await flagMissedClockOuts();
   } catch (err) {
-    console.error('[scheduler] tick failed:', err.message);
+    console.error('[scheduler] retention failed:', err.message);
+  }
+
+  // Independent jobs: one failing must not stop the other.
+  try { await markAbsentees(); } catch (err) {
+    console.error('[scheduler] markAbsentees failed:', err.message);
+  }
+  try { await flagMissedClockOuts(); } catch (err) {
+    console.error('[scheduler] flagMissedClockOuts failed:', err.message);
   }
 }
 
