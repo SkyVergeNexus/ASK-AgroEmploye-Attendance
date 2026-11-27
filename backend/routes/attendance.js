@@ -4,7 +4,7 @@ const { verifyToken, isAdmin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { persistUpload } = require('../helpers/imageStorage');
 const { nearestLocality } = require('../helpers/reverseGeocode');
-const { notify } = require('../helpers/notifications');
+const { notifyUser, notifyAdmins } = require('../helpers/notifications');
 const {
   determinePresence,
   HEARTBEAT_INTERVAL_MS,
@@ -154,6 +154,22 @@ function buildTimestamp(dateVal, timeVal) {
   }
 }
 
+async function safeNotifyAdmins(notification) {
+  try {
+    await notifyAdmins(notification);
+  } catch (err) {
+    console.error('[attendance] notifyAdmins failed:', err.message);
+  }
+}
+
+async function safeNotifyUser(employeeId, notification) {
+  try {
+    await notifyUser(employeeId, notification);
+  } catch (err) {
+    console.error('[attendance] notifyUser failed:', err.message);
+  }
+}
+
 // ============================================================
 //  SELFIE VALIDATION
 // ============================================================
@@ -226,10 +242,8 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
   };
 
   try {
-    // Make sure the account from the token still exists. Without this, a stale
-    // token (deleted employee) causes the attendance_ibfk_1 foreign key error.
     const [employeeRows] = await pool.query(
-      'SELECT id FROM employees WHERE id = ?',
+      'SELECT id, full_name FROM employees WHERE id = ?',
       [req.user.id]
     );
     if (!employeeRows.length) {
@@ -239,6 +253,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
         sessionInvalid: true,
       });
     }
+    const actorName = employeeRows[0].full_name || `Employee #${req.user.id}`;
 
     const [existing] = await pool.query(
       'SELECT id, status FROM attendance WHERE employee_id = ? AND attendance_date = ?',
@@ -371,9 +386,8 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 
     const diffMin = (now - workStart) / 60000;
     const status = diffMin > lateThreshold ? 'late' : 'present';
+    const clockInTime = localTimeString(now);
 
-    // presence_state is NOT NULL, so it always gets a value ('unknown'),
-    // for remote workers too. presence_last_seen_at is only set for on-site.
     await pool.query(
       `INSERT INTO attendance
         (employee_id, attendance_date, clock_in, status,
@@ -384,7 +398,7 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
       [
         req.user.id,
         today,
-        localTimeString(now),
+        clockInTime,
         status,
         bodyLat,
         bodyLng,
@@ -402,13 +416,10 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 
     logger(`clock-in user=${req.user.id} mode=${mode} method=${method} status=${status}`);
 
-    // notify() never throws, so a notification problem cannot make a
-    // successful clock-in look like a failure. The name is looked up from the
-    // database using actorId.
-    await notify('attendance_clock_in', {
-      recipients: 'admins',
-      actorId: req.user.id,
-      data: { mode, status },
+    await safeNotifyAdmins({
+      type: 'attendance_clock_in',
+      title: 'Employee clocked in',
+      message: `${actorName} clocked in (${mode}) at ${clockInTime} — status: ${status}.`,
       targetPath: '/reports',
     });
 
@@ -430,13 +441,16 @@ router.post('/clock-in', verifyToken, upload.single('selfie'), async (req, res) 
 
 // ============================================================
 //  CLOCK OUT  (on-site requires GPS + Wi-Fi when enforced)
-//  Only today's record can be clocked out by the employee. A record
-//  left open is flagged for admin review by the scheduler 9 hours
-//  after closing time (see jobs/scheduler.js).
 // ============================================================
 router.post('/clock-out', verifyToken, async (req, res) => {
   const today = localDateString();
   try {
+    const [employeeRows] = await pool.query(
+      'SELECT id, full_name FROM employees WHERE id = ?',
+      [req.user.id]
+    );
+    const actorName = employeeRows[0]?.full_name || `Employee #${req.user.id}`;
+
     const [rows] = await pool.query(
       'SELECT * FROM attendance WHERE employee_id = ? AND attendance_date = ?',
       [req.user.id, today]
@@ -455,7 +469,6 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     const bodyLng = req.body?.lng != null && req.body.lng !== '' ? Number(req.body.lng) : null;
     const clientIp = getClientIp(req);
 
-    // ── Enforce GPS + Wi-Fi on clock-out for on-site employees ──
     if (!isRemote) {
       const [settingsRows] = await pool.query('SELECT * FROM settings WHERE id = 1');
       const settings = settingsRows[0] || {};
@@ -494,7 +507,6 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       }
     }
 
-    // ── Tasks / reason handling ──
     const tasksCompleted = String(req.body?.tasks_completed || '').trim();
     if (isRemote && !tasksCompleted) {
       return res.status(400).json({
@@ -508,7 +520,6 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       });
     }
 
-    // ── Early clock-out approval (on-site only) ──
     let reason = null;
     let isEarly = false;
     if (!isRemote) {
@@ -534,9 +545,7 @@ router.post('/clock-out', verifyToken, async (req, res) => {
       }
     }
 
-    // presence_state is NOT NULL, so reset it to 'unknown' instead of NULL.
-    // needs_review is cleared here too: a successful manual clock-out means the
-    // record is complete, so any stale review flag is no longer valid.
+    const clockOutTime = localTimeString(now);
     const [result] = await pool.query(
       `UPDATE attendance
        SET clock_out = ?,
@@ -549,7 +558,7 @@ router.post('/clock-out', verifyToken, async (req, res) => {
            presence_outside_since = NULL
        WHERE id = ? AND clock_out IS NULL`,
       [
-        localTimeString(now),
+        clockOutTime,
         reason,
         isRemote ? tasksCompleted : null,
         DEFAULT_PRESENCE_STATE,
@@ -562,10 +571,10 @@ router.post('/clock-out', verifyToken, async (req, res) => {
     }
 
     logger(`clock-out user=${req.user.id} remote=${isRemote} early=${isEarly}`);
-    await notify('attendance_clock_out', {
-      recipients: 'admins',
-      actorId: req.user.id,
-      data: { early: isEarly },
+    await safeNotifyAdmins({
+      type: 'attendance_clock_out',
+      title: 'Employee clocked out',
+      message: `${actorName} clocked out at ${clockOutTime}${isEarly ? ' (early)' : ''}.`,
       targetPath: '/reports',
     });
     res.json({ message: 'Clocked out' });
@@ -604,13 +613,6 @@ router.get('/today', verifyToken, async (req, res) => {
 
 // ============================================================
 //  PRESENCE TRACKING
-//  - Used while on-site. After work_end, employees still inside
-//    keep being tracked until they step outside (recorded as a
-//    presence event only, never an automatic clock-out).
-//  - If they never clock out, the record stays open. 9 hours after
-//    closing time the scheduler flags it for admin review, and an
-//    admin resolves it via /needs-review.
-//  - Rows without a clock_in (absent or leave rows) are never tracked.
 // ============================================================
 router.get('/presence/active', verifyToken, async (req, res) => {
   try {
@@ -757,7 +759,6 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
           nextState = 'outside';
         }
       } else {
-        // unknown — do NOT reset progress toward a departure
         nextState = previousState === 'outside' ? 'outside' : 'unknown';
       }
 
@@ -780,7 +781,6 @@ router.post('/presence/heartbeat', verifyToken, async (req, res) => {
         );
       }
 
-      // after_close_tracking is purely informational — no auto clock-out.
       const nextAfterClose =
         pastClosing && nextState === 'inside'
           ? 1
@@ -856,6 +856,12 @@ router.post('/early-leave/request', verifyToken, async (req, res) => {
   }
 
   try {
+    const [employeeRows] = await pool.query(
+      'SELECT id, full_name FROM employees WHERE id = ?',
+      [req.user.id]
+    );
+    const actorName = employeeRows[0]?.full_name || `Employee #${req.user.id}`;
+
     const [rows] = await pool.query(
       'SELECT * FROM attendance WHERE employee_id = ? AND attendance_date = ?',
       [req.user.id, today]
@@ -891,13 +897,16 @@ router.post('/early-leave/request', verifyToken, async (req, res) => {
     );
 
     logger(`early-leave request user=${req.user.id}`);
-    await notify('early_leave_request_received', {
-      recipients: req.user.id,
+    await safeNotifyUser(req.user.id, {
+      type: 'early_leave_request_received',
+      title: 'Early leave request submitted',
+      message: `Your request to leave around ${outTime.slice(0, 5)} has been submitted for approval.`,
       targetPath: '/leave-requests',
     });
-    await notify('early_leave_request', {
-      recipients: 'admins',
-      actorId: req.user.id,
+    await safeNotifyAdmins({
+      type: 'early_leave_request',
+      title: 'Early leave request',
+      message: `${actorName} requested early leave around ${outTime.slice(0, 5)}: ${reason}`,
       targetPath: '/early-leave',
     });
     res.status(201).json({ message: 'Request submitted. Awaiting admin approval.' });
@@ -971,26 +980,27 @@ router.put('/early-leave/:id/decide', verifyToken, isAdmin, async (req, res) => 
     );
     if (requestRows.length) {
       const requesterId = requestRows[0].employee_id;
-      const decision = {
-        approved: !!approve,
-        adminNote: admin_note ? String(admin_note).trim() : '',
-      };
+      const decisionLabel = approve ? 'approved' : 'rejected';
+      const noteText = admin_note ? ` Note: ${String(admin_note).trim()}` : '';
 
-      // To the employee who asked.
-      await notify('early_leave_decision', {
-        recipients: requesterId,
-        data: decision,
+      await safeNotifyUser(requesterId, {
+        type: 'early_leave_decision',
+        title: `Early leave request ${decisionLabel}`,
+        message: `Your early leave request was ${decisionLabel}.${noteText}`,
         targetPath: '/leave-requests',
       });
-      // To the other admins; the requester is the subject, the deciding admin is named.
-      const [deciderRows] = await pool.query(
-        'SELECT full_name FROM employees WHERE id = ?',
-        [req.user.id]
-      );
-      await notify('early_leave_decision', {
-        recipients: 'admins',
-        actorId: requesterId,
-        data: { ...decision, decidedByName: deciderRows[0]?.full_name || null },
+
+      const [[requesterRow], [deciderRow]] = await Promise.all([
+        pool.query('SELECT full_name FROM employees WHERE id = ?', [requesterId]),
+        pool.query('SELECT full_name FROM employees WHERE id = ?', [req.user.id]),
+      ]);
+      const requesterName = requesterRow[0]?.full_name || `Employee #${requesterId}`;
+      const deciderName = deciderRow[0]?.full_name || `Admin #${req.user.id}`;
+
+      await safeNotifyAdmins({
+        type: 'early_leave_decision',
+        title: `Early leave ${decisionLabel}`,
+        message: `${deciderName} ${decisionLabel} ${requesterName}'s early leave request.${noteText}`,
         targetPath: '/early-leave',
       });
     }
@@ -1100,7 +1110,6 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
   try {
     const events = [];
 
-    // 1. Employee attendance (clock-in + clock-out + reviews)
     const [attendance] = await pool.query(
       `SELECT a.id, a.employee_id, a.attendance_date, a.clock_in, a.clock_out,
               DATE_FORMAT(a.attendance_date, '%Y-%m-%d') AS attendance_date_key,
@@ -1173,7 +1182,6 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
       }
     });
 
-    // 2. Early-leave requests + decisions
     const [earlyLeaves] = await pool.query(
       `SELECT r.id, r.employee_id, r.requested_out_time, r.reason,
               r.status, r.admin_note, r.decided_by, r.decided_at, r.created_at,
@@ -1210,7 +1218,6 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
       }
     });
 
-    // 3. Employee registrations
     const [registrations] = await pool.query(
       `SELECT e.id, e.full_name, e.employee_code, e.email, e.is_approved,
               e.created_at, d.name AS department
@@ -1229,7 +1236,6 @@ router.get('/activity-feed', verifyToken, isAdmin, async (req, res) => {
       });
     });
 
-    // 4. Guest check-ins
     const [guestCheckins] = await pool.query(
       `SELECT g.id, g.full_name, g.phone, g.purpose, g.created_at,
               s.name AS service_name
@@ -1306,11 +1312,6 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
 
 // ============================================================
 //  ADMIN REVIEW — flagged records
-//  A record is flagged (needs_review = 1) by the scheduler when the
-//  employee never clocked out within 9 hours after closing time.
-//  It stays in this queue while admin_resolved = 0 and clock_out IS
-//  NULL. A successful manual clock-out clears needs_review, so
-//  completed records never appear here.
 // ============================================================
 router.get('/needs-review', verifyToken, isAdmin, async (req, res) => {
   try {
@@ -1384,9 +1385,10 @@ router.put('/:id/resolve-review', verifyToken, isAdmin, async (req, res) => {
       return res.status(400).json({ message: 'This attendance record has already been resolved' });
     }
 
-    await notify('attendance_admin_decision', {
-      recipients: r.employee_id,
-      data: { decision, date: r.attendance_date_key },
+    await safeNotifyUser(r.employee_id, {
+      type: 'attendance_admin_decision',
+      title: 'Attendance review updated',
+      message: `Your attendance for ${r.attendance_date_key} was marked as ${newStatus}.`,
       targetPath: '/dashboard',
     });
 
