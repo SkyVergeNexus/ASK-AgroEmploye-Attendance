@@ -23,7 +23,7 @@ function formatExactTime(value) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
 }
 
-export default function Notifications() {
+export function Notifications() {
   const [items, setItems] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [filteredCount, setFilteredCount] = useState(0);
@@ -335,3 +335,5 @@ export default function Notifications() {
     </div>
   );
 }
+
+export default Notifications;

@@ -162,7 +162,7 @@ export default function NotificationBell() {
 
   const handleOpenChange = (next) => {
     setOpen(next);
-    if (next) loadNotifications(); // show fresh data every time the panel opens
+    if (next) loadNotifications();
   };
 
   const markRead = async (item) => {
@@ -175,7 +175,6 @@ export default function NotificationBell() {
       await api.put(`/notifications/${item.id}/read`);
       return true;
     } catch (error) {
-      // Undo just this item, so a refresh that landed in the meantime is not overwritten.
       setItems((cur) => cur.map((n) => (n.id === item.id ? { ...n, read_at: null } : n)));
       setUnreadCount((c) => c + 1);
       toast.error(error.response?.data?.message || 'Unable to mark notification as read.');
@@ -194,7 +193,7 @@ export default function NotificationBell() {
     } catch (error) {
       setItems((cur) => cur.map((n) => (unreadIds.has(n.id) ? { ...n, read_at: null } : n)));
       toast.error(error.response?.data?.message || 'Unable to mark notifications as read.');
-      loadNotifications(); // resync the real unread count
+      loadNotifications();
     }
   };
 
@@ -222,7 +221,6 @@ export default function NotificationBell() {
     <div style={{ width: 'min(400px, calc(100vw - 28px))' }}>
       <style>{css}</style>
 
-      {/* Header */}
       <div
         style={{
           padding: '14px 16px 12px',
@@ -310,7 +308,6 @@ export default function NotificationBell() {
         </div>
       )}
 
-      {/* List */}
       <div style={{ maxHeight: 420, overflowY: 'auto' }}>
         {loading && !items.length ? (
           <div style={{ padding: 12 }}>
@@ -363,7 +360,6 @@ export default function NotificationBell() {
         )}
       </div>
 
-      {/* Footer */}
       <div
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,
