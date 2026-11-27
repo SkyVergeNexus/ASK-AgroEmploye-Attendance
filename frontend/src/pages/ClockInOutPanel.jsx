@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Button, Typography, Space, Tag, Modal, Input, Popconfirm, Alert, Badge,
 } from 'antd';
@@ -527,6 +528,206 @@ export default function ClockInOutPanel({
   const cameraLabel = facingMode === 'user' ? 'Front camera' : 'Back camera';
   const flipLabel = facingMode === 'user' ? 'Back camera' : 'Front camera';
 
+  const fullscreenCameraOverlay = cameraOpen
+    ? createPortal(
+        <div
+          className="cc-cam-fullscreen"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Take a photo"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 2147483000,
+            width: '100vw',
+            height: '100dvh',
+            backgroundColor: '#000',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 3,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: 'calc(env(safe-area-inset-top, 0px) + 14px) 16px 24px',
+              background: 'linear-gradient(180deg, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0) 100%)',
+            }}
+          >
+            <span
+              className="cc-cam-badge"
+              style={{
+                position: 'static',
+                background: 'rgba(20, 20, 20, 0.72)',
+                color: '#fff',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+                padding: '6px 12px',
+                borderRadius: 999,
+                fontSize: 13,
+                fontWeight: 500,
+              }}
+            >
+              {cameraLabel}
+            </span>
+
+            <Button
+              type="text"
+              shape="circle"
+              size="large"
+              icon={<CloseOutlined style={{ color: '#fff', fontSize: 18 }} />}
+              onClick={closeCamera}
+              aria-label="Close camera"
+              style={{
+                background: 'rgba(20, 20, 20, 0.72)',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+                width: 42,
+                height: 42,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            />
+          </div>
+
+          <div
+            style={{
+              position: 'relative',
+              flex: 1,
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: '#000',
+            }}
+          >
+            {cameraError ? (
+              <div style={{ padding: 24, maxWidth: 420, width: '100%', zIndex: 2 }}>
+                <Alert
+                  type="error"
+                  showIcon
+                  title="Camera unavailable"
+                  description={cameraError}
+                  action={
+                    <Space>
+                      <Button size="small" onClick={() => startStream(facingMode)}>
+                        Try again
+                      </Button>
+                      <Button size="small" onClick={closeCamera}>
+                        Close
+                      </Button>
+                    </Space>
+                  }
+                />
+              </div>
+            ) : (
+              <>
+                <video
+                  ref={setVideoEl}
+                  className="cc-cam-video"
+                  playsInline
+                  muted
+                  autoPlay
+                  onLoadedMetadata={() => setCameraReady(true)}
+                  onPlaying={() => setCameraReady(true)}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    display: 'block',
+                    transform: cameraMirrored ? 'scaleX(-1)' : 'none',
+                  }}
+                />
+                {(!cameraReady || cameraStarting) && (
+                  <div
+                    className="cc-cam-overlay"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 10,
+                      color: '#fff',
+                      background: 'rgba(0, 0, 0, 0.75)',
+                      fontSize: 15,
+                    }}
+                  >
+                    <LoadingOutlined style={{ fontSize: 28 }} />
+                    <span>Starting {cameraLabel.toLowerCase()}…</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {!cameraError && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                zIndex: 3,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 12,
+                padding: '28px 16px calc(env(safe-area-inset-bottom, 0px) + 22px)',
+                background: 'linear-gradient(0deg, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0) 100%)',
+              }}
+            >
+              {canFlip && (
+                <Button
+                  size="large"
+                  icon={<SwapOutlined />}
+                  onClick={flipCamera}
+                  disabled={cameraStarting || capturingPhoto}
+                  style={{
+                    height: 48,
+                    borderRadius: 999,
+                    paddingInline: 18,
+                    background: 'rgba(30, 30, 30, 0.82)',
+                    color: '#fff',
+                    border: '1px solid rgba(255, 255, 255, 0.25)',
+                  }}
+                >
+                  {flipLabel}
+                </Button>
+              )}
+              <Button
+                type="primary"
+                size="large"
+                className="cc-btn cc-btn-in"
+                icon={<CameraOutlined />}
+                loading={capturingPhoto}
+                disabled={!cameraReady || !!cameraError}
+                onClick={captureFromCamera}
+                style={{
+                  height: 52,
+                  borderRadius: 999,
+                  paddingInline: 26,
+                  fontSize: 16,
+                  fontWeight: 600,
+                }}
+              >
+                {capturingPhoto ? 'Capturing…' : 'Capture photo'}
+              </Button>
+            </div>
+          )}
+        </div>,
+        document.body
+      )
+    : null;
+
   return (
     <>
       <div className="cc-alerts">
@@ -795,7 +996,7 @@ export default function ClockInOutPanel({
       {/* ═══════════ Remote clock-in modal ═══════════ */}
       <Modal
         {...MODAL_COMMON}
-        open={remoteClockInOpen}
+        open={remoteClockInOpen && !cameraOpen}
         title={mark('Remote clock-in')}
         okText="Submit and clock in"
         cancelText="Cancel"
@@ -1009,206 +1210,7 @@ export default function ClockInOutPanel({
         </Space>
       </Modal>
 
-      {/* ═══════════ Full-screen Camera Capture Overlay (front + back) ═══════════ */}
-      {cameraOpen && (
-        <div
-          className="cc-cam-fullscreen"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Take a photo"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 2000,
-            width: '100vw',
-            height: '100dvh',
-            backgroundColor: '#000',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Top overlay bar */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              zIndex: 3,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: 'calc(env(safe-area-inset-top, 0px) + 14px) 16px 24px',
-              background: 'linear-gradient(180deg, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0) 100%)',
-            }}
-          >
-            <span
-              className="cc-cam-badge"
-              style={{
-                position: 'static',
-                background: 'rgba(20, 20, 20, 0.72)',
-                color: '#fff',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                padding: '6px 12px',
-                borderRadius: 999,
-                fontSize: 13,
-                fontWeight: 500,
-              }}
-            >
-              {cameraLabel}
-            </span>
-
-            <Button
-              type="text"
-              shape="circle"
-              size="large"
-              icon={<CloseOutlined style={{ color: '#fff', fontSize: 18 }} />}
-              onClick={closeCamera}
-              aria-label="Close camera"
-              style={{
-                background: 'rgba(20, 20, 20, 0.72)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                width: 42,
-                height: 42,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            />
-          </div>
-
-          {/* Full-bleed viewfinder stage */}
-          <div
-            style={{
-              position: 'relative',
-              flex: 1,
-              width: '100%',
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: '#000',
-            }}
-          >
-            {cameraError ? (
-              <div style={{ padding: 24, maxWidth: 420, width: '100%', zIndex: 2 }}>
-                <Alert
-                  type="error"
-                  showIcon
-                  title="Camera unavailable"
-                  description={cameraError}
-                  action={
-                    <Space>
-                      <Button size="small" onClick={() => startStream(facingMode)}>
-                        Try again
-                      </Button>
-                      <Button size="small" onClick={closeCamera}>
-                        Close
-                      </Button>
-                    </Space>
-                  }
-                />
-              </div>
-            ) : (
-              <>
-                <video
-                  ref={setVideoEl}
-                  className="cc-cam-video"
-                  playsInline
-                  muted
-                  autoPlay
-                  onLoadedMetadata={() => setCameraReady(true)}
-                  onPlaying={() => setCameraReady(true)}
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    display: 'block',
-                    transform: cameraMirrored ? 'scaleX(-1)' : 'none',
-                  }}
-                />
-                {(!cameraReady || cameraStarting) && (
-                  <div
-                    className="cc-cam-overlay"
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 10,
-                      color: '#fff',
-                      background: 'rgba(0, 0, 0, 0.75)',
-                      fontSize: 15,
-                    }}
-                  >
-                    <LoadingOutlined style={{ fontSize: 28 }} />
-                    <span>Starting {cameraLabel.toLowerCase()}…</span>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Bottom floating controls */}
-          {!cameraError && (
-            <div
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                zIndex: 3,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 12,
-                padding: '28px 16px calc(env(safe-area-inset-bottom, 0px) + 22px)',
-                background: 'linear-gradient(0deg, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0) 100%)',
-              }}
-            >
-              {canFlip && (
-                <Button
-                  size="large"
-                  icon={<SwapOutlined />}
-                  onClick={flipCamera}
-                  disabled={cameraStarting || capturingPhoto}
-                  style={{
-                    height: 48,
-                    borderRadius: 999,
-                    paddingInline: 18,
-                    background: 'rgba(30, 30, 30, 0.82)',
-                    color: '#fff',
-                    border: '1px solid rgba(255, 255, 255, 0.25)',
-                  }}
-                >
-                  {flipLabel}
-                </Button>
-              )}
-              <Button
-                type="primary"
-                size="large"
-                className="cc-btn cc-btn-in"
-                icon={<CameraOutlined />}
-                loading={capturingPhoto}
-                disabled={!cameraReady || !!cameraError}
-                onClick={captureFromCamera}
-                style={{
-                  height: 52,
-                  borderRadius: 999,
-                  paddingInline: 26,
-                  fontSize: 16,
-                  fontWeight: 600,
-                }}
-              >
-                {capturingPhoto ? 'Capturing…' : 'Capture photo'}
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
+      {fullscreenCameraOverlay}
     </>
   );
 }
