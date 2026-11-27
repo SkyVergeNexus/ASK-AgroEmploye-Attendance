@@ -1,23 +1,22 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  Button, Typography, Space, Tag, message, Table, Badge, Grid, Avatar,
-  Alert, Modal, Input, Popconfirm, ConfigProvider,
+  Button, Typography, Space, Tag, message, Table, Grid, Avatar,
+  Alert, ConfigProvider,
 } from 'antd';
 import {
   LoginOutlined, LogoutOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  CloseCircleOutlined, CalendarOutlined, UserOutlined, ReloadOutlined, DeleteOutlined,
-  EnvironmentOutlined, WifiOutlined, CameraOutlined, HomeOutlined,
-  SafetyCertificateOutlined, ApartmentOutlined, SwapOutlined, LoadingOutlined,
+  CloseCircleOutlined, CalendarOutlined, UserOutlined, ReloadOutlined,
+  EnvironmentOutlined, WifiOutlined, SafetyCertificateOutlined, ApartmentOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { assetUrl } from '../config';
 import AttendanceRecordTag from '../components/AttendanceRecordTag';
 import { attendanceClockOutLabel } from '../utils/attendanceRecordLabel';
+import ClockInOutPanel from './ClockInOutPanel';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
-const { TextArea } = Input;
 
 const statusColor = {
   present: 'green',
@@ -38,11 +37,8 @@ const statusHex = {
 const RECENT_LIMIT = 5;
 
 // ═══════════ Brand styles (cocoa) ═══════════
-// NOTE: Ant Design modals render in a portal OUTSIDE .cc-root. The CSS variables
-// used to be defined only on .cc-root, so inside modals they were undefined and
-// buttons like "Capture photo" became white-on-white (invisible). The variables
-// are now defined on both .cc-root and .cc-portal (set via rootClassName on every
-// Modal), and the button rules also carry hard-coded fallbacks.
+// Defined on both .cc-root and .cc-portal so portalled Ant Design modals
+// and buttons always receive theme tokens and stay high-contrast.
 const CSS = `
 .cc-root, .cc-portal {
   --cc-bean: #2a1810;
@@ -116,7 +112,7 @@ const CSS = `
 .cc-tile-value { font-size: 20px; font-weight: 700; margin-top: 2px; line-height: 1.2; text-transform: capitalize; }
 .cc-tile-sub { margin-top: 4px; }
 
-/* Buttons (hard-coded fallbacks so they stay visible inside portalled modals) */
+/* Buttons */
 .cc-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .cc-btn { height: 54px !important; border-radius: 14px !important; font-weight: 600 !important; font-size: 16px !important; }
 .cc-btn-in:not(:disabled) { background: var(--cc-leaf, #3f6b3a) !important; border-color: var(--cc-leaf, #3f6b3a) !important; color: #fff !important; box-shadow: 0 8px 18px -10px var(--cc-leaf, #3f6b3a); }
@@ -131,13 +127,10 @@ const CSS = `
 .cc-note { margin-top: 12px; }
 
 .cc-alerts { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
-
-/* Alerts: one consistent look everywhere (page + modals) */
 .cc-alerts .ant-alert, .cc-portal .ant-alert { border-left-width: 4px; border-radius: 12px; }
 .cc-alerts .ant-alert-title, .cc-portal .ant-alert-title,
 .cc-alerts .ant-alert-message, .cc-portal .ant-alert-message { font-weight: 600; }
 
-/* Modals */
 .cc-portal .ant-modal-mask { background: rgba(42,24,16,0.55) !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 .cc-portal .ant-modal-container, .cc-portal .ant-modal-content { border-radius: 20px; }
 
@@ -148,13 +141,16 @@ const CSS = `
 .cc-check-title { font-weight: 600; font-size: 14px; }
 .cc-check-text { font-size: 13px; color: var(--cc-muted); line-height: 1.4; }
 
-/* Mode cards */
+/* Mode cards & Camera controls */
 .cc-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
 .cc-mode { border: 1px solid var(--cc-line); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .cc-mode-remote { background: #f5f9f3; border-color: #cfe0c9; }
 .cc-mode-ic { font-size: 24px; color: var(--cc-leaf); }
 
-/* Camera */
+.cc-cam-entry-group { width: 100%; }
+.cc-cam-entry-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cc-cam-entry-btn { width: 100%; }
+
 .cc-cam-stage { position: relative; width: 100%; background: #000; border-radius: 14px; overflow: hidden; max-height: 60vh; }
 .cc-cam-video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
 .cc-cam-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #fff; font-size: 13px; background: rgba(0,0,0,0.35); }
@@ -181,15 +177,13 @@ const CSS = `
   .cc-tile { display: flex; align-items: center; gap: 12px; }
   .cc-tile-ic { margin-bottom: 0; }
   .cc-modes { grid-template-columns: 1fr; }
+  .cc-cam-entry-row { grid-template-columns: 1fr; }
   .cc-panel { padding: 16px; border-radius: 16px; }
   .cc-cam-controls { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .cc-fill { transition: none; } }
 `;
 
-// One theme for everything: buttons, alerts, modals AND toast messages.
-// Toasts only pick this up because they are created with message.useMessage()
-// inside the ConfigProvider (see Dashboard below).
 const antTheme = {
   token: {
     colorPrimary: '#4a2c1a',
@@ -211,9 +205,6 @@ const antTheme = {
     fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
   },
 };
-
-// Applied to every Modal so portalled content gets the brand variables + styles.
-const modalCommon = { rootClassName: 'cc-portal', centered: true };
 
 // ═══════════ Helpers ═══════════
 function localDateString(d = new Date()) {
@@ -318,8 +309,6 @@ function CheckRow({ tone, title, text }) {
   );
 }
 
-// The ConfigProvider lives in this thin wrapper so that the toast messages
-// created inside DashboardInner (message.useMessage) inherit the brand theme.
 export default function Dashboard() {
   return (
     <ConfigProvider theme={antTheme}>
@@ -337,42 +326,10 @@ function DashboardInner() {
   const [settings, setSettings] = useState(null);
   const [earlyRequests, setEarlyRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [clocking, setClocking] = useState(false);
   const [now, setNow] = useState(new Date());
 
   const [ipCheck, setIpCheck] = useState(null);
   const [ipChecking, setIpChecking] = useState(false);
-
-  const [earlyModalOpen, setEarlyModalOpen] = useState(false);
-  const [earlyReason, setEarlyReason] = useState('');
-  const [submittingRequest, setSubmittingRequest] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-
-  const [clockModeOpen, setClockModeOpen] = useState(false);
-  const [remoteClockInOpen, setRemoteClockInOpen] = useState(false);
-  const [remoteClockOutOpen, setRemoteClockOutOpen] = useState(false);
-  const [remoteLocation, setRemoteLocation] = useState('');
-  const [remoteSelfie, setRemoteSelfie] = useState(null);
-  const [selfieCoordinates, setSelfieCoordinates] = useState(null);
-  const [selfiePreview, setSelfiePreview] = useState(null);
-  const [selfieCapturedAt, setSelfieCapturedAt] = useState(null);
-  const [capturingSelfie, setCapturingSelfie] = useState(false);
-
-  const [taskInput, setTaskInput] = useState('');
-  const [remoteTasks, setRemoteTasks] = useState([]);
-
-  // Camera state
-  const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraStream, setCameraStream] = useState(null);
-  const [cameraError, setCameraError] = useState(null);
-  const [cameraReady, setCameraReady] = useState(false);
-  const [cameraStarting, setCameraStarting] = useState(false);
-  const [facingMode, setFacingMode] = useState('user'); // 'user' = front, 'environment' = back
-  const [cameraMirrored, setCameraMirrored] = useState(true);
-  const [canFlip, setCanFlip] = useState(true);
-  const [videoEl, setVideoEl] = useState(null);
-  const streamRef = useRef(null);
-  const startIdRef = useRef(0);
 
   const [geo, setGeo] = useState({
     status: 'idle',
@@ -381,21 +338,8 @@ function DashboardInner() {
     radius: null,
   });
 
-  const [clockInError, setClockInError] = useState(null);
-  const [clockOutError, setClockOutError] = useState(null);
-
   const screens = useBreakpoint();
   const isMobile = !screens.md;
-
-  useEffect(() => {
-    if (!remoteSelfie) {
-      setSelfiePreview(null);
-      return undefined;
-    }
-    const previewUrl = URL.createObjectURL(remoteSelfie);
-    setSelfiePreview(previewUrl);
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [remoteSelfie]);
 
   const load = useCallback(async () => {
     try {
@@ -409,7 +353,6 @@ function DashboardInner() {
       setHistory(h.data);
       setSettings(s.data);
       setEarlyRequests(er.data);
-      setClockInError(null);
     } catch (err) {
       messageApi.error(err.response?.data?.message || 'Failed to load attendance');
     } finally {
@@ -448,7 +391,6 @@ function DashboardInner() {
     return () => clearInterval(t);
   }, []);
 
-  // ── Geolocation ──
   const refreshGeo = useCallback(() => {
     if (!settings) return;
     const enforced = !!Number(settings.enforce_location);
@@ -488,153 +430,15 @@ function DashboardInner() {
     );
   }, [settings]);
 
-  useEffect(() => { refreshGeo(); }, [refreshGeo]);
-
-  // ═══════════ CAMERA CAPTURE (front + back) ═══════════
-  const stopStream = () => {
-    if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    setCameraStream(null);
-  };
-
-  // Always release the camera if the page unmounts while it is open.
-  useEffect(() => () => {
-    if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
-  }, []);
-
-  const startStream = async (mode) => {
-    const startId = ++startIdRef.current; // ignore results of older/cancelled starts
-    stopStream();
-    setCameraReady(false);
-    setCameraError(null);
-    setCameraStarting(true);
-
-    try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Camera is not available. Open the app over HTTPS and use a supported browser.');
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-
-      // The modal was closed (or the camera flipped again) while we were waiting.
-      if (startId !== startIdRef.current) {
-        stream.getTracks().forEach((t) => t.stop());
-        return;
-      }
-
-      // Only mirror the preview/photo for the front camera.
-      const track = stream.getVideoTracks()[0];
-      const actual = track?.getSettings?.().facingMode;
-      setCameraMirrored(actual ? actual === 'user' : mode === 'user');
-
-      // Hide the flip button on devices with a single camera.
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        setCanFlip(devices.filter((d) => d.kind === 'videoinput').length > 1);
-      } catch {
-        setCanFlip(true);
-      }
-
-      streamRef.current = stream;
-      setCameraStream(stream);
-    } catch (err) {
-      if (startId !== startIdRef.current) return;
-      const msg =
-        err.name === 'NotAllowedError'
-          ? 'Camera permission denied. Allow camera access in your browser settings.'
-          : err.name === 'NotFoundError' || err.name === 'OverconstrainedError'
-          ? 'No camera found on this device.'
-          : err.name === 'NotReadableError'
-          ? 'The camera is being used by another app. Close it and try again.'
-          : err.message || 'Could not open camera';
-      setCameraError(msg);
-    } finally {
-      if (startId === startIdRef.current) setCameraStarting(false);
-    }
-  };
-
-  const openCamera = () => {
-    setRemoteSelfie(null);
-    setSelfieCoordinates(null);
-    setSelfieCapturedAt(null);
-    setCameraOpen(true);
-    startStream(facingMode);
-  };
-
-  const closeCamera = () => {
-    startIdRef.current += 1; // cancel any pending start
-    stopStream();
-    setCameraOpen(false);
-    setCameraReady(false);
-    setCameraStarting(false);
-    setCameraError(null);
-  };
-
-  const flipCamera = () => {
-    const next = facingMode === 'user' ? 'environment' : 'user';
-    setFacingMode(next);
-    startStream(next);
-  };
-
-  // Attach the stream to the <video>. A callback ref (videoEl state) is used so
-  // this still works when the modal content mounts after the stream arrives.
   useEffect(() => {
-    if (!videoEl) return;
-    videoEl.srcObject = cameraStream || null;
-    if (cameraStream) videoEl.play().catch(() => {});
-  }, [videoEl, cameraStream]);
+    refreshGeo();
+  }, [refreshGeo]);
 
-  const captureFromCamera = async () => {
-    const video = videoEl;
-    if (!video || !cameraReady || capturingSelfie) return;
+  const refreshChecks = useCallback(() => {
+    refreshGeo();
+    checkIp();
+  }, [refreshGeo, checkIp]);
 
-    setCapturingSelfie(true);
-    try {
-      if (!navigator.geolocation) throw new Error('Location is not supported by this browser');
-      const position = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          resolve,
-          (error) => reject(new Error(error.message || 'Allow location access to capture the photo location')),
-          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-        );
-      });
-      const coordinates = {
-        lat: position.coords.latitude,
-        lng: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-      };
-      const capturedAt = new Date();
-
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
-      const ctx = canvas.getContext('2d');
-      if (cameraMirrored) {
-        // Front camera: save the photo the way the preview looked.
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
-      }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-      if (!blob) throw new Error('Failed to capture photo');
-
-      const file = new File([blob], `selfie_${Date.now()}.jpg`, { type: 'image/jpeg' });
-      setRemoteSelfie(file);
-      setSelfieCoordinates(coordinates);
-      setSelfieCapturedAt(capturedAt);
-      closeCamera();
-      messageApi.success('Photo captured');
-    } catch (err) {
-      messageApi.error(err.message || 'Could not capture photo and location');
-    } finally {
-      setCapturingSelfie(false);
-    }
-  };
-
-  // ═══════════ TODAY'S REQUESTS ═══════════
   const todaysRequests = useMemo(() => {
     if (!today) return [];
     const todayStr = localDateString();
@@ -645,212 +449,6 @@ function DashboardInner() {
   const approvedEarly = todaysRequests.find((r) => r.status === 'approved');
   const rejectedEarly = todaysRequests.find((r) => r.status === 'rejected');
 
-  // ═══════════ CLOCK IN ═══════════
-  const clockIn = async (mode = 'onsite') => {
-    if (mode === 'remote' && !remoteLocation.trim()) {
-      messageApi.error('Enter the location where you are working today');
-      return;
-    }
-    if (mode === 'remote' && !remoteSelfie) {
-      messageApi.error('Take a live photo with your camera before clocking in');
-      return;
-    }
-    if (mode === 'remote' && !selfieCoordinates) {
-      messageApi.error('Retake the photo to capture its GPS location');
-      return;
-    }
-    setClocking(true);
-    setClockInError(null);
-    try {
-      let coords = geo.coords;
-      if (mode === 'remote') {
-        coords = selfieCoordinates;
-      } else if (!coords && navigator.geolocation) {
-        coords = await new Promise((resolve) => {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-            () => resolve(null),
-            { enableHighAccuracy: true, timeout: 8000 }
-          );
-        });
-      }
-
-      if (mode === 'remote') {
-        const formData = new FormData();
-        formData.append('mode', 'remote');
-        formData.append('remote_location', remoteLocation.trim());
-        formData.append('lat', String(coords.lat));
-        formData.append('lng', String(coords.lng));
-        formData.append('selfie', remoteSelfie);
-        if (selfieCapturedAt) formData.append('captured_at', selfieCapturedAt.toISOString());
-        await api.post('/attendance/clock-in', formData);
-      } else {
-        await api.post('/attendance/clock-in', { mode: 'onsite', ...(coords || {}) });
-      }
-      messageApi.success('Clocked in!');
-      window.dispatchEvent(new Event('attendance:changed'));
-      setClockModeOpen(false);
-      setRemoteClockInOpen(false);
-      setRemoteLocation('');
-      setRemoteSelfie(null);
-      setSelfieCoordinates(null);
-      setSelfieCapturedAt(null);
-      load();
-      refreshGeo();
-    } catch (e) {
-      const data = e.response?.data;
-      const msg = data?.message || e.message || 'Clock-in failed';
-      setClockInError({
-        message: msg,
-        requiresOfficeWifi: !!data?.requiresOfficeWifi,
-        requiresLocation: !!data?.requiresLocation,
-        distance: data?.distance,
-        radius: data?.radius,
-        sawIp: data?.sawIp,
-      });
-      messageApi.error(msg);
-      checkIp();
-    } finally {
-      setClocking(false);
-    }
-  };
-
-  // ═══════════ CLOCK OUT ═══════════
-  // On-site: must be inside GPS AND on office Wi-Fi (when enforced).
-  // Remote: requires tasks list.
-  const clockOut = async (tasksList) => {
-    const hasTasksArg = Array.isArray(tasksList);
-
-    // Remote flow — open tasks modal first
-    if (today?.clock_in_mode === 'remote' && !hasTasksArg) {
-      setRemoteClockOutOpen(true);
-      return;
-    }
-    if (today?.clock_in_mode === 'remote' && hasTasksArg && tasksList.length === 0) {
-      messageApi.error('Add at least one completed task before clocking out');
-      return;
-    }
-
-    const tasksText = hasTasksArg
-      ? tasksList.map((t, i) => `${i + 1}. ${t}`).join('\n')
-      : null;
-
-    setClocking(true);
-    setClockOutError(null);
-    try {
-      const payload = {};
-      if (hasTasksArg) payload.tasks_completed = tasksText;
-
-      // For on-site, fetch fresh GPS right before submitting
-      if (today?.clock_in_mode !== 'remote') {
-        let coords = geo.coords;
-        if (!coords && navigator.geolocation) {
-          coords = await new Promise((resolve) => {
-            navigator.geolocation.getCurrentPosition(
-              (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-              () => resolve(null),
-              { enableHighAccuracy: true, timeout: 8000 }
-            );
-          });
-        }
-        if (coords) {
-          payload.lat = coords.lat;
-          payload.lng = coords.lng;
-        }
-      }
-
-      await api.post('/attendance/clock-out', payload);
-      messageApi.success('Clocked out!');
-      window.dispatchEvent(new Event('attendance:changed'));
-      setRemoteClockOutOpen(false);
-      setRemoteTasks([]);
-      setTaskInput('');
-      load();
-      refreshGeo();
-    } catch (e) {
-      const data = e.response?.data;
-
-      if (data?.requiresApproval) {
-        setRemoteClockOutOpen(false);
-        setEarlyModalOpen(true);
-        setEarlyReason('');
-      } else if (data?.requiresOfficeWifi) {
-        setClockOutError({
-          message: 'You must be on the office Wi-Fi to clock out.',
-          requiresOfficeWifi: true,
-          sawIp: data?.sawIp,
-        });
-        messageApi.error('Connect to the office Wi-Fi to clock out');
-        checkIp();
-      } else if (data?.requiresLocation) {
-        setClockOutError({
-          message: 'Enable location/GPS to clock out.',
-          requiresLocation: true,
-        });
-        messageApi.error('Enable GPS to clock out');
-      } else if (data?.distance != null) {
-        setClockOutError({
-          message: `You are ${data.distance}m from the office.`,
-          distance: data.distance,
-          radius: data.radius,
-        });
-        messageApi.error(`You are ${data.distance}m away. Must be within ${data.radius}m.`);
-      } else {
-        messageApi.error(data?.message || 'Clock-out failed');
-      }
-    } finally {
-      setClocking(false);
-    }
-  };
-
-  // ═══════════ TASK LIST HANDLERS ═══════════
-  const addTask = () => {
-    const trimmed = taskInput.trim();
-    if (!trimmed) return messageApi.warning('Type a task before adding');
-    if (trimmed.length > 500) return messageApi.warning('Each task must be 500 characters or fewer');
-    setRemoteTasks((prev) => [...prev, trimmed]);
-    setTaskInput('');
-  };
-  const removeTask = (index) => setRemoteTasks((prev) => prev.filter((_, i) => i !== index));
-  const handleTaskInputKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      addTask();
-    }
-  };
-
-  // ═══════════ EARLY LEAVE ═══════════
-  const submitEarlyRequest = async () => {
-    if (!earlyReason.trim()) return messageApi.error('Please provide a reason');
-    setSubmittingRequest(true);
-    try {
-      await api.post('/attendance/early-leave/request', { reason: earlyReason.trim() });
-      messageApi.success('Request submitted. Waiting for admin approval.');
-      setEarlyModalOpen(false);
-      setEarlyReason('');
-      load();
-    } catch (e) {
-      messageApi.error(e.response?.data?.message || 'Failed to submit request');
-    } finally {
-      setSubmittingRequest(false);
-    }
-  };
-
-  const cancelEarlyRequest = async () => {
-    if (!pendingEarly) return;
-    setCancelling(true);
-    try {
-      await api.delete('/attendance/early-leave/' + pendingEarly.id);
-      messageApi.success('Request cancelled');
-      load();
-    } catch (e) {
-      messageApi.error(e.response?.data?.message || 'Failed to cancel request');
-    } finally {
-      setCancelling(false);
-    }
-  };
-
-  // ═══════════ Flags ═══════════
   const enforceLocation = !!Number(settings?.enforce_location);
   const ipEnforced = ipCheck?.enforce === true;
   const enforceNetwork = !!Number(settings?.enforce_network);
@@ -876,23 +474,6 @@ function DashboardInner() {
     scheduleStart && scheduleEnd && now >= scheduleStart && now <= scheduleEnd
   );
 
-  const canClockIn = Boolean(!today && withinWindow);
-  const canClockInOnsite =
-    canClockIn &&
-    (!enforceLocation || !locationBlocked) &&
-    (!networkIsEnforced || ipAllowed);
-
-  const isOnsiteToday = today && today.clock_in_mode !== 'remote';
-  const onsiteOutBlocked =
-    isOnsiteToday && ((enforceLocation && !geoInside) || networkBlocked);
-
-  const canClockOut = Boolean(
-    today &&
-    !today.clock_out &&
-    !pendingEarly &&
-    (today.clock_in_mode === 'remote' || !onsiteOutBlocked)
-  );
-
   const clockInUnavailableReason = !today && settings
     ? now < scheduleStart
       ? `Clock-in opens at ${String(settings.work_start).slice(0, 5)}.`
@@ -909,7 +490,6 @@ function DashboardInner() {
       .slice(0, RECENT_LIMIT);
   }, [history]);
 
-  // ═══════════ Countdown ═══════════
   const countdown = useMemo(() => {
     if (!settings) return { text: '—', hint: 'Loading settings…', active: false };
 
@@ -961,7 +541,6 @@ function DashboardInner() {
       return { text: 'Flexible', hint: 'Remote — clock out when your work is complete', active: false };
     }
 
-    // On-site, still checked in
     if (now >= workEnd) {
       return {
         text: 'Monitoring',
@@ -1022,30 +601,6 @@ function DashboardInner() {
     },
   ];
 
-  // ── Clock-out blocker description (on-site only) ──
-  const clockOutBlockedDescription = (() => {
-    if (!isOnsiteToday) return null;
-    const bits = [];
-    if (enforceLocation && !geoInside) {
-      bits.push(
-        geo.status === 'outside'
-          ? `GPS: you are ${geo.distance}m away (max ${geo.radius}m)`
-          : geo.status === 'denied'
-            ? 'GPS permission denied'
-            : geo.status === 'unsupported'
-              ? 'GPS not supported by this device'
-              : geo.status === 'no-office'
-                ? 'Office location not configured'
-                : 'GPS: checking…'
-      );
-    }
-    if (networkBlocked) {
-      bits.push(`Wi-Fi: ${ipCheck?.clientIp || 'unknown IP'} is not on the office network`);
-    }
-    return bits.length ? bits.join(' · ') : null;
-  })();
-
-  // ── Office check rows (side panel) ──
   const locationRow = !enforceLocation
     ? { tone: 'idle', text: 'Not required for your office.' }
     : geo.status === 'inside'
@@ -1082,13 +637,6 @@ function DashboardInner() {
     : statusKey === 'leave' ? <CalendarOutlined />
     : <ClockCircleOutlined />;
   const statusTone = statusHex[statusKey] || '#85705f';
-
-  const mark = (label) => (
-    <span className="cc-serif" style={{ fontSize: 15, fontWeight: 600 }}>{label}</span>
-  );
-
-  const cameraLabel = facingMode === 'user' ? 'Front camera' : 'Back camera';
-  const flipLabel = facingMode === 'user' ? 'Use back camera' : 'Use front camera';
 
   return (
     <div className="cc-root">
@@ -1182,28 +730,20 @@ function DashboardInner() {
               <Button
                 size="small"
                 icon={<ReloadOutlined />}
-                onClick={() => { load(); checkIp(); refreshGeo(); }}
+                onClick={() => { load(); refreshChecks(); }}
                 loading={loading || ipChecking}
               >
                 Refresh
               </Button>
             </div>
 
-            {/* Alerts */}
-            <div className="cc-alerts">
-              {clockInUnavailableReason && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  title={clockInUnavailableReason}
-                  description={`Your administrator's clock-in hours are ${String(settings.work_start).slice(0, 5)}–${String(settings.work_end).slice(0, 5)}.`}
-                />
-              )}
-
-              {!today && networkIsEnforced && ipCheck && (
-                ipCheck.allowed ? (
+            {!today && networkIsEnforced && ipCheck && (
+              <div className="cc-alerts">
+                {ipCheck.allowed ? (
                   <Alert
-                    type="success" showIcon icon={<SafetyCertificateOutlined />}
+                    type="success"
+                    showIcon
+                    icon={<SafetyCertificateOutlined />}
                     title="You're on the office network"
                     description={
                       <span style={{ fontSize: 13 }}>
@@ -1213,7 +753,9 @@ function DashboardInner() {
                   />
                 ) : (
                   <Alert
-                    type="error" showIcon icon={<WifiOutlined />}
+                    type="error"
+                    showIcon
+                    icon={<WifiOutlined />}
                     title="You're not on the office Wi-Fi"
                     description={
                       <span style={{ fontSize: 13 }}>
@@ -1221,144 +763,10 @@ function DashboardInner() {
                       </span>
                     }
                   />
-                )
-              )}
+                )}
+              </div>
+            )}
 
-              {clockInError && !today && (
-                <Alert
-                  type="error" showIcon closable onClose={() => setClockInError(null)}
-                  title={clockInError.message}
-                  description={
-                    clockInError.requiresOfficeWifi ? (
-                      <>
-                        <Text strong>Connect to the office Wi-Fi network</Text> and try again.
-                        {clockInError.sawIp && (
-                          <div style={{ marginTop: 4, fontSize: 12 }}>
-                            <Text type="secondary">Your current IP: </Text>
-                            <Text code>{clockInError.sawIp}</Text>
-                          </div>
-                        )}
-                      </>
-                    ) : clockInError.requiresLocation ? (
-                      'Enable location/GPS in your browser settings, then try again.'
-                    ) : clockInError.distance != null ? (
-                      `You are ${clockInError.distance}m away. Move within ${clockInError.radius}m of the office.`
-                    ) : (
-                      'Try again or contact your administrator.'
-                    )
-                  }
-                />
-              )}
-
-              {today?.needs_review && (
-                <Alert
-                  type="warning" showIcon
-                  title="Missed clock-out — awaiting admin review"
-                  description="You did not clock out within 24 hours of your clock-in. An administrator will review this day and mark you present or absent."
-                />
-              )}
-
-              {clockOutError && today && !today.clock_out && (
-                <Alert
-                  type="error" showIcon closable onClose={() => setClockOutError(null)}
-                  title={clockOutError.message}
-                  description={
-                    clockOutError.requiresOfficeWifi ? (
-                      <>
-                        <Text strong>Connect to the office Wi-Fi</Text> to clock out.
-                        {clockOutError.sawIp && (
-                          <div style={{ marginTop: 4, fontSize: 12 }}>
-                            <Text type="secondary">Your current IP: </Text>
-                            <Text code>{clockOutError.sawIp}</Text>
-                          </div>
-                        )}
-                      </>
-                    ) : clockOutError.requiresLocation ? (
-                      'Enable location/GPS in your browser settings to clock out.'
-                    ) : clockOutError.distance != null ? (
-                      `You are ${clockOutError.distance}m away. Move within ${clockOutError.radius}m of the office.`
-                    ) : (
-                      'Try again or contact your administrator.'
-                    )
-                  }
-                  action={
-                    <Button size="small" onClick={() => { refreshGeo(); checkIp(); }}>
-                      Retry
-                    </Button>
-                  }
-                />
-              )}
-
-              {isOnsiteToday && clockOutBlockedDescription && !today.clock_out && (
-                <Alert
-                  type="warning" showIcon
-                  title="Clock-out requires the office GPS and Wi-Fi"
-                  description={clockOutBlockedDescription}
-                  action={
-                    <Button
-                      size="small" icon={<ReloadOutlined />}
-                      onClick={() => { refreshGeo(); checkIp(); }}
-                      loading={ipChecking}
-                    >
-                      Re-check
-                    </Button>
-                  }
-                />
-              )}
-
-              {today && !today.clock_out && today.clock_in_mode !== 'remote' && !today.needs_review && (
-                <Alert
-                  type="info" showIcon
-                  title="On-site presence monitoring"
-                  description="Keep the employee app open. You must be within the office GPS and on the office Wi-Fi to clock out. The time you clock out is what gets recorded — not the scheduled closing time. If you never clock out within 24 hours, admin will review your day."
-                />
-              )}
-
-              {pendingEarly && (
-                <Alert
-                  type="warning" showIcon
-                  title="Early clock-out pending approval"
-                  description={
-                    <div>
-                      <div>
-                        You requested to leave at <Text strong>{pendingEarly.requested_out_time}</Text>.
-                      </div>
-                      <Popconfirm
-                        title="Cancel this request?"
-                        okText="Yes, cancel"
-                        okButtonProps={{ danger: true }}
-                        cancelText="Keep it"
-                        onConfirm={cancelEarlyRequest}
-                      >
-                        <Button danger size="small" icon={<DeleteOutlined />} loading={cancelling} style={{ marginTop: 8 }}>
-                          Cancel request
-                        </Button>
-                      </Popconfirm>
-                    </div>
-                  }
-                />
-              )}
-              {approvedEarly && !today?.clock_out && (
-                <Alert
-                  type="success" showIcon
-                  title="Early clock-out approved"
-                  description="You can now click Clock Out when you're inside the office GPS and Wi-Fi."
-                />
-              )}
-              {rejectedEarly && !today?.clock_out && (
-                <Alert
-                  type="error" showIcon
-                  title="Early clock-out rejected"
-                  description={
-                    rejectedEarly.admin_note
-                      ? `Admin note: ${rejectedEarly.admin_note}`
-                      : 'Your request was not approved. Please continue your shift.'
-                  }
-                />
-              )}
-            </div>
-
-            {/* Tiles */}
             <div className="cc-tiles">
               <Tile
                 icon={<LoginOutlined />}
@@ -1384,39 +792,28 @@ function DashboardInner() {
               />
             </div>
 
-            {/* Actions */}
-            <div className="cc-actions">
-              <Button
-                className="cc-btn cc-btn-in"
-                icon={<LoginOutlined />}
-                onClick={() => setClockModeOpen(true)}
-                disabled={!canClockIn}
-                loading={clocking && canClockIn}
-              >
-                Clock in
-              </Button>
-              <Button
-                className="cc-btn cc-btn-out"
-                icon={<LogoutOutlined />}
-                onClick={() => clockOut()}
-                disabled={!canClockOut}
-                loading={clocking && canClockOut}
-              >
-                Clock out
-              </Button>
-            </div>
-
-            <div className="cc-note">
-              {pendingEarly && (
-                <Badge status="warning" text={<Text type="secondary">Awaiting admin approval</Text>} />
-              )}
-              {approvedEarly && !today?.clock_out && (
-                <Badge status="success" text={<Text type="secondary">Approved — you can clock out</Text>} />
-              )}
-              {today?.clock_out && (
-                <Badge status="success" text={<Text type="secondary">Day complete — see you tomorrow</Text>} />
-              )}
-            </div>
+            <ClockInOutPanel
+              today={today}
+              settings={settings}
+              geo={geo}
+              ipCheck={ipCheck}
+              ipChecking={ipChecking}
+              withinWindow={withinWindow}
+              clockInUnavailableReason={clockInUnavailableReason}
+              enforceLocation={enforceLocation}
+              locationBlocked={locationBlocked}
+              networkIsEnforced={networkIsEnforced}
+              ipAllowed={ipAllowed}
+              geoInside={geoInside}
+              networkBlocked={networkBlocked}
+              pendingEarly={pendingEarly}
+              approvedEarly={approvedEarly}
+              rejectedEarly={rejectedEarly}
+              isMobile={isMobile}
+              messageApi={messageApi}
+              onRefreshAll={load}
+              onRefreshChecks={refreshChecks}
+            />
           </section>
 
           {/* ═══════════ Office checks ═══════════ */}
@@ -1430,7 +827,7 @@ function DashboardInner() {
             <Button
               block
               icon={<EnvironmentOutlined />}
-              onClick={() => { refreshGeo(); checkIp(); }}
+              onClick={refreshChecks}
               loading={ipChecking || geo.status === 'checking'}
               style={{ marginTop: 10 }}
             >
@@ -1480,14 +877,12 @@ function DashboardInner() {
                     </div>
                   </div>
                   {r.early_leave_reason && (
-                    <div
-                      style={{
-                        fontSize: 12, color: '#7a4a12', background: '#fdf3e1',
-                        border: '1px solid #f1dcae', borderRadius: 10, padding: '6px 10px',
-                      }}
-                    >
-                      <strong>Reason:</strong> {r.early_leave_reason}
-                    </div>
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title="Early leave reason"
+                      description={r.early_leave_reason}
+                    />
                   )}
                 </div>
               ))
@@ -1504,339 +899,6 @@ function DashboardInner() {
           )}
         </section>
       </div>
-
-      {/* ═══════════ Clock mode modal ═══════════ */}
-      <Modal
-        {...modalCommon}
-        open={clockModeOpen}
-        title={mark('How are you working today?')}
-        footer={null}
-        onCancel={() => setClockModeOpen(false)}
-        width={isMobile ? 'calc(100vw - 24px)' : 540}
-      >
-        <Text type="secondary">
-          Choose where you are reporting from so we run the right checks.
-        </Text>
-        <div className="cc-modes">
-          <div className="cc-mode">
-            <WifiOutlined className="cc-mode-ic" />
-            <Text strong>On-site</Text>
-            <Text type="secondary" style={{ minHeight: 40 }}>
-              Clock in at the office. We check your GPS and the office Wi-Fi.
-            </Text>
-            <Button
-              block
-              disabled={!canClockInOnsite}
-              loading={clocking && canClockInOnsite}
-              onClick={() => clockIn('onsite')}
-            >
-              Clock in on-site
-            </Button>
-            {!canClockInOnsite && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {clockInUnavailableReason
-                  ? clockInUnavailableReason
-                  : networkIsEnforced && !ipAllowed
-                  ? 'You must be on the office Wi-Fi network.'
-                  : enforceLocation && locationBlocked
-                  ? 'You must be within the office GPS radius.'
-                  : 'Office checks must pass.'}
-              </Text>
-            )}
-          </div>
-          <div className="cc-mode cc-mode-remote">
-            <HomeOutlined className="cc-mode-ic" />
-            <Text strong>Remote</Text>
-            <Text type="secondary" style={{ minHeight: 40 }}>
-              Working in the field or from home. Share your location and a live photo.
-            </Text>
-            <Button
-              type="primary"
-              block
-              disabled={!canClockIn}
-              loading={clocking && canClockIn}
-              onClick={() => {
-                setClockModeOpen(false);
-                setRemoteClockInOpen(true);
-              }}
-            >
-              Clock in remotely
-            </Button>
-            {!canClockIn && clockInUnavailableReason && (
-              <Text type="secondary" style={{ fontSize: 12 }}>{clockInUnavailableReason}</Text>
-            )}
-          </div>
-        </div>
-      </Modal>
-
-      {/* ═══════════ Remote clock-in modal ═══════════ */}
-      <Modal
-        {...modalCommon}
-        open={remoteClockInOpen}
-        title={mark('Remote clock-in')}
-        okText="Submit and clock in"
-        cancelText="Cancel"
-        confirmLoading={clocking}
-        okButtonProps={{ disabled: !remoteLocation.trim() || !remoteSelfie || !selfieCoordinates }}
-        onOk={() => clockIn('remote')}
-        onCancel={() => {
-          setRemoteClockInOpen(false);
-          setRemoteSelfie(null);
-          setSelfieCoordinates(null);
-          setSelfieCapturedAt(null);
-        }}
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
-        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            title="Remote attendance check"
-            description={
-              settings?.work_start && settings?.work_end
-                ? `Remote clock-in is available from ${String(settings.work_start).slice(0, 5)} to ${String(settings.work_end).slice(0, 5)}. Enter your work location, allow GPS, and take a live photo.`
-                : 'Enter your work location, allow GPS, and take a live photo during working hours.'
-            }
-          />
-          <div>
-            <Text strong>Work location</Text>
-            <Input
-              value={remoteLocation}
-              onChange={(e) => setRemoteLocation(e.target.value)}
-              placeholder="e.g. Client farm, town or site name"
-              maxLength={255}
-              showCount
-              style={{ marginTop: 6 }}
-            />
-          </div>
-          <div>
-            <Text strong>Live photo at your work location</Text>
-            <Text type="secondary" style={{ display: 'block', marginTop: 2, marginBottom: 8 }}>
-              Use the front camera for a selfie or the back camera to photograph your site. Uploading from your gallery is disabled.
-            </Text>
-            {selfiePreview ? (
-              <div>
-                <img
-                  src={selfiePreview}
-                  alt="Captured photo preview"
-                  style={{ display: 'block', width: '100%', maxHeight: 240, objectFit: 'cover', borderRadius: 12 }}
-                />
-                {selfieCapturedAt && (
-                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
-                    Captured at {selfieCapturedAt.toLocaleTimeString()}
-                  </Text>
-                )}
-                {selfieCoordinates && (
-                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
-                    GPS captured with photo: {selfieCoordinates.lat.toFixed(6)}, {selfieCoordinates.lng.toFixed(6)}
-                    {Number.isFinite(selfieCoordinates.accuracy)
-                      ? ` (accuracy ±${Math.round(selfieCoordinates.accuracy)} m)`
-                      : ''}
-                  </Text>
-                )}
-                <Space style={{ marginTop: 8 }}>
-                  <Button icon={<CameraOutlined />} onClick={openCamera} size="small">Retake</Button>
-                  <Button
-                    type="link"
-                    danger
-                    onClick={() => {
-                      setRemoteSelfie(null);
-                      setSelfieCoordinates(null);
-                      setSelfieCapturedAt(null);
-                    }}
-                    style={{ paddingLeft: 0 }}
-                  >
-                    Remove photo
-                  </Button>
-                </Space>
-              </div>
-            ) : (
-              <div>
-                <Button
-                  type="primary"
-                  icon={<CameraOutlined />}
-                  onClick={openCamera}
-                  block
-                  size="large"
-                  className="cc-btn cc-btn-in"
-                >
-                  Open camera
-                </Button>
-                <div
-                  style={{
-                    marginTop: 10, padding: '8px 12px', background: '#fdf3e1',
-                    border: '1px solid #f1dcae', borderRadius: 10, fontSize: 12,
-                    color: '#7a4a12', lineHeight: 1.5,
-                  }}
-                >
-                  <strong>Note:</strong> you must take a live photo with the camera.
-                </div>
-              </div>
-            )}
-          </div>
-        </Space>
-      </Modal>
-
-      {/* ═══════════ Remote clock-out modal (tasks) ═══════════ */}
-      <Modal
-        {...modalCommon}
-        open={remoteClockOutOpen}
-        title={mark('What did you complete today?')}
-        okText="Submit and clock out"
-        cancelText="Cancel"
-        confirmLoading={clocking}
-        okButtonProps={{ disabled: remoteTasks.length === 0 }}
-        onOk={() => clockOut(remoteTasks)}
-        onCancel={() => setRemoteClockOutOpen(false)}
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            title="List today's completed tasks"
-            description="Add at least one task before clocking out."
-          />
-          <Space.Compact style={{ width: '100%' }}>
-            <Input
-              value={taskInput}
-              onChange={(e) => setTaskInput(e.target.value)}
-              onKeyDown={handleTaskInputKeyDown}
-              placeholder="e.g. Visited 3 client farms"
-              maxLength={500}
-            />
-            <Button type="primary" onClick={addTask}>Add</Button>
-          </Space.Compact>
-          {remoteTasks.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {remoteTasks.map((t, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    background: '#faf7f3', border: '1px solid #e6ded4',
-                    borderRadius: 10, padding: '6px 10px',
-                  }}
-                >
-                  <Text style={{ flex: 1 }}>{i + 1}. {t}</Text>
-                  <Button type="link" danger size="small" onClick={() => removeTask(i)}>
-                    Remove
-                  </Button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <Text type="secondary">No tasks added yet.</Text>
-          )}
-        </Space>
-      </Modal>
-
-      {/* ═══════════ Early leave modal ═══════════ */}
-      <Modal
-        {...modalCommon}
-        open={earlyModalOpen}
-        title={mark('Request early clock-out')}
-        okText="Send request"
-        cancelText="Cancel"
-        confirmLoading={submittingRequest}
-        onOk={submitEarlyRequest}
-        onCancel={() => setEarlyModalOpen(false)}
-        width={isMobile ? 'calc(100vw - 24px)' : 520}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="warning"
-            showIcon
-            title="Admin approval required"
-            description="You cannot clock out before your scheduled end time without approval. Your request will go to an administrator."
-          />
-          <div>
-            <Text strong>Reason</Text>
-            <TextArea
-              value={earlyReason}
-              onChange={(e) => setEarlyReason(e.target.value)}
-              rows={4}
-              maxLength={5000}
-              showCount
-              placeholder="Explain why you need to leave early"
-              style={{ marginTop: 6 }}
-            />
-          </div>
-        </Space>
-      </Modal>
-
-      {/* ═══════════ Camera capture modal (front + back) ═══════════ */}
-      <Modal
-        {...modalCommon}
-        open={cameraOpen}
-        title={mark('Take a photo')}
-        onCancel={closeCamera}
-        footer={null}
-        width={isMobile ? 'calc(100vw - 24px)' : 560}
-        destroyOnHidden
-        styles={{ body: { padding: 12 } }}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {cameraError ? (
-            <Alert
-              type="error"
-              showIcon
-              title="Camera unavailable"
-              description={cameraError}
-              action={
-                <Button size="small" onClick={() => startStream(facingMode)}>Try again</Button>
-              }
-            />
-          ) : (
-            <div
-              className="cc-cam-stage"
-              style={{ aspectRatio: isMobile ? '3 / 4' : '4 / 3' }}
-            >
-              <video
-                ref={setVideoEl}
-                className="cc-cam-video"
-                playsInline
-                muted
-                autoPlay
-                onLoadedMetadata={() => setCameraReady(true)}
-                onPlaying={() => setCameraReady(true)}
-                style={{ transform: cameraMirrored ? 'scaleX(-1)' : 'none' }}
-              />
-              <span className="cc-cam-badge">{cameraLabel}</span>
-              {(!cameraReady || cameraStarting) && (
-                <div className="cc-cam-overlay">
-                  <LoadingOutlined style={{ fontSize: 24 }} />
-                  Starting {cameraLabel.toLowerCase()}…
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className={`cc-cam-controls${canFlip ? '' : ' single'}`}>
-            {canFlip && (
-              <Button
-                className="cc-btn cc-btn-ghost"
-                icon={<SwapOutlined />}
-                onClick={flipCamera}
-                disabled={cameraStarting || capturingSelfie}
-              >
-                {flipLabel}
-              </Button>
-            )}
-            <Button
-              type="primary"
-              className="cc-btn cc-btn-in"
-              icon={<CameraOutlined />}
-              loading={capturingSelfie}
-              disabled={!cameraReady || !!cameraError}
-              onClick={captureFromCamera}
-            >
-              {capturingSelfie ? 'Capturing…' : 'Capture photo'}
-            </Button>
-          </div>
-        </Space>
-      </Modal>
     </div>
   );
 }
